@@ -33,8 +33,17 @@ def __init__(
     pruner,           # Pruner (None 可)
     logger_obj=None,  # JSONL ロガー
     checkpoint_dir="./checkpoints",
+    failure_extractor=None,       # FailureKnowledgeExtractor (None 可、ECHO 用)
+    turn_reward_evaluator=None,   # TurnRewardEvaluator (None 可、MT-GRPO/HiPER 用)
 )
 ```
+
+**新パラメータ**:
+
+| パラメータ | 型 | デフォルト | 説明 |
+|-----------|-----|----------|------|
+| `failure_extractor` | `FailureKnowledgeExtractor \| None` | `None` | ECHO 軽量版。失敗ノードの知識抽出・兄弟注入を行う。`echo.enabled=True` の場合に `research_cmd.py` で初期化される |
+| `turn_reward_evaluator` | `TurnRewardEvaluator \| None` | `None` | Phase 毎のターンレベル報酬評価器。`method` が `mt_grpo` / `hiper` かつ `turn_rewards` が設定されている場合に初期化される |
 
 ### データ構造
 
@@ -59,7 +68,7 @@ def __init__(
    - `select_next_node()` で `(node, operator)` を取得
    - operator に応じた処理:
      - `"evaluate"` -> `_evaluate_node(node)`
-     - `"debug"` -> `tree_ops.debug(node)` で子ノード生成、親の `children_ids` に追加
+     - `"debug"` -> `tree_ops.debug(node)` で子ノード生成、親の `children_ids` に追加。**ECHO**: `failure_extractor` が存在する場合、`extract(failed_node)` で失敗知識を抽出し、`inject(summary, siblings)` で兄弟ノードに注入
      - `"draft"` -> `tree_ops.draft(branch_factor, all_nodes)` で新規ノード群を生成
      - `"improve"` -> `tree_ops.improve(node, all_nodes, n_children)` で改善ノード群を生成、親の status を `"expanded"` に変更
    - ノード状態をログ出力（step, node_id, operator, status, mu, se, lcb, priority 等）
@@ -100,7 +109,8 @@ def __init__(
 5. `node.mark_evaluated()` で status を `"evaluated"` に変更
 6. `_update_best(node)` で最良ノードを更新
 7. 優先度を再計算してヒープに再投入
-8. `ppo_buffer` に追加（`node.mu` が None でない場合）
+8. **ターン報酬計算**: `turn_reward_evaluator` が存在する場合、`evaluate_all(node, parent, all_nodes)` で Phase 毎のターン報酬を計算
+9. `ppo_buffer` に追加（`node.mu` が None でない場合）。ターン報酬が計算された場合は `PPORolloutV2` を使用し、`turn_rewards` を含める
 
 ### _update_best(node)
 
@@ -151,6 +161,7 @@ LCB が最高のノードを `best_node` として更新。
 | `feasible` | `bool` | `True` | 実行可能性制約の充足 |
 | `debug_depth` | `int` | `0` | デバッグ深度 |
 | `error_message` | `str \| None` | `None` | エラーメッセージ |
+| `failure_context` | `list[dict]` | `[]` | ECHO 軽量版で注入された失敗知識のリスト。各要素は `FailureSummary.to_dict()` 形式（`node_id`, `hypothesis`, `error_category`, `error_message`, `lesson`） |
 
 ### メソッド
 
@@ -210,11 +221,18 @@ def __init__(self, specs, agent_llm, rng=None)
 
 既存の成功実験をアトミックに改善する非同期メソッド。
 
-- `IMPROVE_PROMPT` テンプレートに親ノードの統計情報（mu, SE, LCB, feasible）と兄弟コンテキストを埋め込む
+- `IMPROVE_PROMPT` テンプレートに親ノードの統計情報（mu, SE, LCB, feasible）と兄弟コンテキスト、および失敗コンテキスト（`{failure_context}`）を埋め込む
+- `_build_failure_context(parent)` で親ノードの `failure_context` をテキスト化し、プロンプトに注入する
 - 温度: `specs._improve_temperature`（デフォルト 0.7）、リトライごとに +0.1
 - 各子ノードの `experiment_config` を `validate_experiment_config()` でバリデーション
 - 親との設定差分が 1 キーを超える場合は警告ログを出力
 - バリデーション失敗時はそのノードをスキップ
+
+**失敗コンテキスト構築** (`_build_failure_context`):
+
+- `node.failure_context` が空でなければ、「Failed approaches to avoid:」ヘッダに続いて各失敗サマリを整形出力
+- 各サマリ: `[{error_category}] {hypothesis}: {lesson}`
+- 空の場合は空文字列を返す
 
 **兄弟コンテキスト構築** (`_build_sibling_context`):
 

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sera.specs.resource_spec import SlurmConfig
+from sera.specs.resource_spec import ComputeConfig, SlurmConfig
 
 
 # ---------------------------------------------------------------------------
@@ -395,3 +395,204 @@ class TestParseTimeLimit:
         from sera.execution.slurm_executor import SlurmExecutor
 
         assert SlurmExecutor._parse_time_limit("30") == 30
+
+
+# ---------------------------------------------------------------------------
+# ComputeConfig mapping tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def compute_config():
+    return ComputeConfig(
+        gpu_count=2, memory_gb=64, cpu_cores=16, gpu_type="A100", gpu_required=True,
+    )
+
+
+@pytest.fixture
+def slurm_config_no_extra():
+    return SlurmConfig(
+        partition="gpu",
+        account="test-account",
+        time_limit="02:00:00",
+        modules=["cuda/12.1"],
+        sbatch_extra=[],
+    )
+
+
+class TestComputeConfigMapping:
+    def test_build_compute_params_static(self, compute_config):
+        """_build_compute_params returns correct submitit params from ComputeConfig."""
+        from sera.execution.slurm_executor import SlurmExecutor
+
+        params = SlurmExecutor._build_compute_params(compute_config)
+        assert params["slurm_gpus_per_node"] == 2
+        assert params["slurm_mem"] == "64G"
+        assert params["slurm_cpus_per_task"] == 16
+        assert params["_gpu_type"] == "A100"
+
+    def test_compute_params_mapped(self, tmp_workspace, slurm_config_no_extra, compute_config):
+        """ComputeConfig fields are mapped to submitit parameters in run()."""
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
+            job_state="COMPLETED", job_result=0,
+        )
+
+        with patch.dict(sys.modules, {"submitit": fake_submitit}):
+            from sera.execution.slurm_executor import SlurmExecutor
+
+            exe = SlurmExecutor(
+                work_dir=tmp_workspace,
+                slurm_config=slurm_config_no_extra,
+                compute_config=compute_config,
+                poll_interval_sec=0.01,
+            )
+
+            script = tmp_workspace / "experiment.py"
+            script.write_text("print('hello')")
+
+            run_dir = tmp_workspace / "runs" / "node-comp"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text('{"primary": {"name": "acc", "value": 0.9}}')
+
+            exe.run(node_id="node-comp", script_path=script, seed=42)
+
+        # Check update_parameters was called with compute params
+        call_kwargs = fake_executor.update_parameters.call_args
+        assert call_kwargs is not None
+        kw = call_kwargs.kwargs
+        assert kw["slurm_gpus_per_node"] == 2
+        assert kw["slurm_mem"] == "64G"
+        assert kw["slurm_cpus_per_task"] == 16
+        assert kw["slurm_additional_parameters"]["constraint"] == "A100"
+
+    def test_gpu_type_as_constraint(self, tmp_workspace, slurm_config_no_extra):
+        """gpu_type is added as a constraint in additional_parameters."""
+        cfg = ComputeConfig(
+            gpu_count=1, memory_gb=16, cpu_cores=4, gpu_type="V100", gpu_required=True,
+        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
+            job_state="COMPLETED", job_result=0,
+        )
+
+        with patch.dict(sys.modules, {"submitit": fake_submitit}):
+            from sera.execution.slurm_executor import SlurmExecutor
+
+            exe = SlurmExecutor(
+                work_dir=tmp_workspace,
+                slurm_config=slurm_config_no_extra,
+                compute_config=cfg,
+                poll_interval_sec=0.01,
+            )
+
+            script = tmp_workspace / "experiment.py"
+            script.write_text("print('hello')")
+
+            exe.run(node_id="node-gtyp", script_path=script, seed=42)
+
+        kw = fake_executor.update_parameters.call_args.kwargs
+        assert kw["slurm_additional_parameters"]["constraint"] == "V100"
+
+    def test_sbatch_extra_overrides_gpu(self, tmp_workspace, compute_config):
+        """sbatch_extra with --gres removes slurm_gpus_per_node from compute mapping."""
+        cfg_slurm = SlurmConfig(
+            partition="gpu",
+            account="test",
+            time_limit="01:00:00",
+            sbatch_extra=["--gres=gpu:4"],
+        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
+            job_state="COMPLETED", job_result=0,
+        )
+
+        with patch.dict(sys.modules, {"submitit": fake_submitit}):
+            from sera.execution.slurm_executor import SlurmExecutor
+
+            exe = SlurmExecutor(
+                work_dir=tmp_workspace,
+                slurm_config=cfg_slurm,
+                compute_config=compute_config,
+                poll_interval_sec=0.01,
+            )
+
+            script = tmp_workspace / "experiment.py"
+            script.write_text("print('hello')")
+
+            exe.run(node_id="node-gres", script_path=script, seed=42)
+
+        kw = fake_executor.update_parameters.call_args.kwargs
+        assert "slurm_gpus_per_node" not in kw
+        assert kw["slurm_additional_parameters"]["gres"] == "gpu:4"
+
+    def test_sbatch_extra_overrides_mem(self, tmp_workspace, compute_config):
+        """sbatch_extra with --mem removes slurm_mem from compute mapping."""
+        cfg_slurm = SlurmConfig(
+            partition="gpu",
+            account="test",
+            time_limit="01:00:00",
+            sbatch_extra=["--mem=128G"],
+        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
+            job_state="COMPLETED", job_result=0,
+        )
+
+        with patch.dict(sys.modules, {"submitit": fake_submitit}):
+            from sera.execution.slurm_executor import SlurmExecutor
+
+            exe = SlurmExecutor(
+                work_dir=tmp_workspace,
+                slurm_config=cfg_slurm,
+                compute_config=compute_config,
+                poll_interval_sec=0.01,
+            )
+
+            script = tmp_workspace / "experiment.py"
+            script.write_text("print('hello')")
+
+            exe.run(node_id="node-memx", script_path=script, seed=42)
+
+        kw = fake_executor.update_parameters.call_args.kwargs
+        assert "slurm_mem" not in kw
+        assert kw["slurm_additional_parameters"]["mem"] == "128G"
+
+    def test_no_compute_config_backward_compat(self, tmp_workspace, slurm_config):
+        """compute_config=None preserves existing behavior."""
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
+            job_state="COMPLETED", job_result=0,
+        )
+
+        with patch.dict(sys.modules, {"submitit": fake_submitit}):
+            from sera.execution.slurm_executor import SlurmExecutor
+
+            exe = SlurmExecutor(
+                work_dir=tmp_workspace,
+                slurm_config=slurm_config,
+                poll_interval_sec=0.01,
+            )
+            assert exe.compute_config is None
+
+            script = tmp_workspace / "experiment.py"
+            script.write_text("print('hello')")
+
+            run_dir = tmp_workspace / "runs" / "node-compat"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text('{"primary": {"name": "acc", "value": 0.9}}')
+
+            result = exe.run(node_id="node-compat", script_path=script, seed=42)
+
+        assert result.success is True
+        kw = fake_executor.update_parameters.call_args.kwargs
+        assert "slurm_gpus_per_node" not in kw
+        assert "slurm_mem" not in kw
+        assert "slurm_cpus_per_task" not in kw
+
+    def test_gpu_not_required(self):
+        """gpu_required=False means slurm_gpus_per_node is not set."""
+        from sera.execution.slurm_executor import SlurmExecutor
+
+        cfg = ComputeConfig(
+            gpu_count=2, memory_gb=32, cpu_cores=8, gpu_type="", gpu_required=False,
+        )
+        params = SlurmExecutor._build_compute_params(cfg)
+        assert "slurm_gpus_per_node" not in params
+        assert params["slurm_mem"] == "32G"
+        assert params["slurm_cpus_per_task"] == 8

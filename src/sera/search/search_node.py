@@ -53,6 +53,9 @@ class SearchNode:
     debug_depth: int = 0
     error_message: str | None = None
 
+    # ECHO: failure knowledge context injected from sibling/ancestor failures
+    failure_context: list[dict] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         """Serialize to dict for JSON storage."""
         result: dict[str, Any] = {}

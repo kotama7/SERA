@@ -59,6 +59,7 @@ def run_replay(node_id: str, seed: int, work_dir: str) -> None:
     # Select executor based on resource spec
     executor_type = "local"
     slurm_cfg = None
+    compute_cfg = None
     if resource_path.exists():
         with open(resource_path) as f:
             rdata = yaml.safe_load(f)
@@ -67,6 +68,8 @@ def run_replay(node_id: str, seed: int, work_dir: str) -> None:
         executor_type = compute.get("executor_type", "local")
         if executor_type == "slurm":
             slurm_cfg = rs.get("slurm", {})
+            from sera.specs.resource_spec import ComputeConfig
+            compute_cfg = ComputeConfig(**compute)
 
     if executor_type == "slurm" and slurm_cfg is not None:
         from sera.execution.slurm_executor import SlurmExecutor
@@ -75,6 +78,7 @@ def run_replay(node_id: str, seed: int, work_dir: str) -> None:
         executor = SlurmExecutor(
             work_dir=workspace,
             slurm_config=SlurmConfig(**slurm_cfg),
+            compute_config=compute_cfg,
             interpreter_command=interpreter_command,
             seed_arg_format=seed_arg_format,
         )

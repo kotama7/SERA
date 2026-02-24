@@ -111,6 +111,8 @@ Parent experiment:
 
 {sibling_context}
 
+{failure_context}
+
 Propose {n_children} atomic improvements. Each should change at most 1-2 variables.
 Return a JSON array:
 ```json
@@ -365,6 +367,7 @@ class TreeOps:
         variables = ", ".join(f"{v.name}({v.type})" for v in problem_spec.manipulated_variables)
 
         sibling_context = self._build_sibling_context(parent, all_nodes)
+        failure_context = self._build_failure_context(parent)
 
         prompt = IMPROVE_PROMPT.format(
             problem_description=problem_description,
@@ -377,6 +380,7 @@ class TreeOps:
             parent_lcb=parent.lcb,
             parent_feasible=parent.feasible,
             sibling_context=sibling_context,
+            failure_context=failure_context,
             n_children=n_children,
         )
 
@@ -468,6 +472,21 @@ class TreeOps:
                     pass
 
         return None
+
+    @staticmethod
+    def _build_failure_context(node: SearchNode) -> str:
+        """Build failure context string from node.failure_context (ECHO)."""
+        failure_ctx = getattr(node, "failure_context", [])
+        if not failure_ctx:
+            return ""
+
+        lines = ["Known failure patterns (avoid these):"]
+        for fc in failure_ctx:
+            hypothesis = fc.get("hypothesis", "unknown")
+            category = fc.get("error_category", "unknown")
+            lesson = fc.get("lesson", "")
+            lines.append(f"- [{category}] {hypothesis}: {lesson}")
+        return "\n".join(lines)
 
     def _build_sibling_context(self, parent: SearchNode, all_nodes: dict[str, SearchNode]) -> str:
         """Build sibling context per section 6.8.1 rules.

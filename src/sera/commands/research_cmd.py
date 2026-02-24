@@ -72,6 +72,7 @@ def run_research(
         executor = SlurmExecutor(
             work_dir=workspace,
             slurm_config=specs.resource.slurm,
+            compute_config=specs.resource.compute,
             interpreter_command=interpreter_cmd,
             seed_arg_format=seed_arg_fmt,
         )
@@ -131,9 +132,30 @@ def run_research(
                 model_spec=specs.model,
                 lineage_manager=lineage_manager,
                 log_path=log_dir / "ppo_log.jsonl",
+                plan_spec=specs.plan,
             )
         except Exception as e:
             console.print(f"[yellow]PPO/Lineage disabled: {e}[/yellow]")
+
+    # Conditionally initialize turn reward evaluator and failure extractor
+    turn_reward_evaluator = None
+    failure_extractor = None
+
+    plan_spec = specs.plan
+    reward_method = getattr(getattr(plan_spec, "reward", None), "method", "outcome_rm")
+
+    if reward_method in ("mt_grpo", "hiper"):
+        turn_reward_spec = getattr(plan_spec, "turn_rewards", None)
+        if turn_reward_spec is not None:
+            from sera.learning.turn_reward import TurnRewardEvaluator
+            turn_reward_evaluator = TurnRewardEvaluator(turn_reward_spec)
+            console.print(f"[cyan]Turn-reward evaluator enabled (method={reward_method})[/cyan]")
+
+    echo_config = getattr(plan_spec, "echo", None)
+    if echo_config is not None and getattr(echo_config, "enabled", False):
+        from sera.search.failure_extractor import FailureKnowledgeExtractor
+        failure_extractor = FailureKnowledgeExtractor(echo_config, agent_llm=agent_llm)
+        console.print("[cyan]ECHO failure knowledge extraction enabled[/cyan]")
 
     manager = SearchManager(
         specs=specs,
@@ -146,6 +168,8 @@ def run_research(
         pruner=pruner,
         logger_obj=search_logger,
         checkpoint_dir=checkpoint_dir,
+        failure_extractor=failure_extractor,
+        turn_reward_evaluator=turn_reward_evaluator,
     )
 
     # Resume from checkpoint if requested

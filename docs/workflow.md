@@ -432,6 +432,37 @@ PPO 学習は以下の**両方**を満たす場合にのみ有効:
 1. `ExecutionSpec.learning.enabled == True`
 2. `AgentLLM.provider == "local"` (ローカル GPU モデル使用時)
 
+### 報酬手法の選択
+
+`plan_spec.reward.method` により報酬計算と Advantage 推定の手法を選択する:
+
+| 手法 | 報酬計算 | Advantage 推定 | 必要な追加設定 |
+|------|---------|---------------|--------------|
+| `outcome_rm`（デフォルト） | `primary_value - penalties` | 従来の GAE | なし |
+| `mt_grpo` | `Σ(weight * turn_reward) - penalties` | 従来の GAE（ターン報酬反映済み） | `turn_rewards` 設定 |
+| `hiper` | `mt_grpo` と同一 | 3 層階層的 Advantage 分解 | `turn_rewards` + `hiper` 設定 |
+
+### ターンレベル報酬（MT-GRPO / HiPER）
+
+`turn_reward_evaluator` が有効な場合、Phase 4 の評価完了後に以下の Phase 毎報酬が計算される:
+
+| Phase | 評価器 | 説明 |
+|-------|--------|------|
+| phase0 | `citation_relevance` | 仮説中の先行研究参照 |
+| phase2 | `hypothesis_novelty` | 既存ノードとの新規性 |
+| phase3 | `code_executability` | コード実行成功の二値 |
+| phase4 | `metric_improvement` | 親ノード比の改善率 |
+| phase7 | `paper_score_delta` | 論文スコア改善（プレースホルダ） |
+
+### ECHO 軽量版（失敗知識注入）
+
+`echo.enabled=True` の場合、debug オペレータ実行後に:
+
+1. `FailureKnowledgeExtractor.extract(failed_node)` で失敗知識を構造化抽出
+2. エラーカテゴリ分類: `runtime`, `oom`, `timeout`, `logical`, `unknown`
+3. `inject(summary, siblings)` で兄弟ノードの `failure_context` に注入
+4. improve プロンプトの `{failure_context}` プレースホルダに注入され、LLM が失敗パターンを回避
+
 ### トリガ条件
 
 ```python
@@ -450,14 +481,29 @@ def should_update(n_evaluated):
 ```mermaid
 flowchart TD
     A["PPO バッファから<br/>rollouts 構築"] --> B["Value Head で<br/>価値推定"]
-    B --> C["GAE (Generalised Advantage Estimation)<br/>advantage = reward - value"]
-    C --> D["vLLM エンジン sleep<br/>（GPU メモリ解放）"]
-    D --> E["LoRA パラメータのみ更新<br/>PPO clipped surrogate"]
-    E --> F["デルタ計算<br/>post_weights - pre_weights"]
-    F --> G["adapter_delta.safetensors 保存"]
-    G --> H["適応的 KL 係数制御"]
-    H --> I["vLLM エンジン wake"]
+    B --> C{報酬手法?}
+    C -->|outcome_rm / mt_grpo| D["GAE<br/>advantage = reward - value"]
+    C -->|hiper| E["HierarchicalAdvantageEstimator<br/>3層Advantage分解"]
+    D --> F["vLLM エンジン sleep<br/>（GPU メモリ解放）"]
+    E --> F
+    F --> G["LoRA パラメータのみ更新<br/>PPO clipped surrogate"]
+    G --> H["デルタ計算<br/>post_weights - pre_weights"]
+    H --> I["adapter_delta.safetensors 保存"]
+    I --> J["適応的 KL 係数制御"]
+    J --> K["vLLM エンジン wake"]
 ```
+
+### HiPER 3 層 Advantage 分解
+
+`method == "hiper"` の場合、`HierarchicalAdvantageEstimator` が以下の 3 層で Advantage を計算:
+
+| 層 | 計算 | 重み（デフォルト） | 意味 |
+|----|------|------------------|------|
+| High Level | `reward - value` | 0.4 | 全体パフォーマンス |
+| Switch Level | `-variance(turn_rewards)` | 0.3 | Phase 間バランスペナルティ |
+| Low Level | `mean(turn_rewards) - value` | 0.3 | Phase 平均ベースの推定 |
+
+最終 Advantage: `A = Σ(weight_i * A_i)`
 
 ### PPO 更新の詳細
 
@@ -715,7 +761,7 @@ flowchart TD
     START[開始] --> VERIFY["SpecFreezer.verify()<br/>ExecutionSpec 整合性確認"]
     VERIFY -->|不一致| EXIT2["exit(2)"]
     VERIFY -->|OK| LOAD[AllSpecs ロード]
-    LOAD --> INIT["コンポーネント初期化<br/>AgentLLM, Executor,<br/>Evaluator, TreeOps,<br/>PPOTrainer, Pruner"]
+    LOAD --> INIT["コンポーネント初期化<br/>AgentLLM, Executor,<br/>Evaluator, TreeOps,<br/>PPOTrainer, Pruner,<br/>TurnRewardEvaluator,<br/>FailureKnowledgeExtractor"]
     INIT --> RESUME{--resume?}
     RESUME -->|はい| RESTORE[チェックポイント復元]
     RESUME -->|いいえ| RUN

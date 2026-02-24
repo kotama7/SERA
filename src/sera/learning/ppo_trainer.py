@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sera.learning.rollout import PPORollout
+from sera.learning.rollout import PPORollout, PPORolloutV2
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +44,14 @@ class PPOTrainer:
         model_spec: Any,
         lineage_manager: Any,
         log_path: Path,
+        plan_spec: Any = None,
     ) -> None:
         from sera.utils.logging import JsonlLogger
 
         self.exec_spec = exec_spec
         self.model_spec = model_spec
         self.lineage_manager = lineage_manager
+        self.plan_spec = plan_spec
         self.logger = JsonlLogger(log_path)
 
         # Extract learning hyperparameters with sensible defaults
@@ -117,6 +119,9 @@ class PPOTrainer:
             self.logger.log({"event": "ppo_update", **result})
             return result
 
+        # Route advantage computation based on reward method
+        self._compute_advantages_for_method(rollouts)
+
         return await self._ppo_update_impl(rollouts, agent_llm, specs)
 
     def notify_step(self, current_best_lcb: float) -> None:
@@ -139,6 +144,36 @@ class PPOTrainer:
         if self._steps_since_improvement >= plateau_patience:
             return True
         return False
+
+    # ------------------------------------------------------------------
+    # Method-based advantage routing
+    # ------------------------------------------------------------------
+
+    def _compute_advantages_for_method(self, rollouts: list[PPORollout]) -> None:
+        """Route advantage computation based on the reward method in plan_spec."""
+        method = "outcome_rm"
+        if self.plan_spec is not None:
+            reward_cfg = getattr(self.plan_spec, "reward", None)
+            method = getattr(reward_cfg, "method", "outcome_rm") if reward_cfg else "outcome_rm"
+
+        if method == "hiper":
+            hiper_cfg = getattr(self.plan_spec, "hiper", None) if self.plan_spec else None
+            if hiper_cfg is not None:
+                from sera.learning.hierarchical_ppo import HierarchicalAdvantageEstimator
+
+                estimator = HierarchicalAdvantageEstimator(hiper_cfg)
+                # Build turn_rewards_map from PPORolloutV2 instances
+                turn_rewards_map: dict[str, dict[str, float]] = {}
+                for r in rollouts:
+                    if isinstance(r, PPORolloutV2) and r.turn_rewards:
+                        turn_rewards_map[r.node_id] = r.turn_rewards
+                estimator.compute_hierarchical_advantages(rollouts, turn_rewards_map)
+                return
+            # Fallback to GAE if no hiper config
+            logger.warning("HiPER method selected but no hiper config; falling back to GAE")
+
+        # outcome_rm and mt_grpo both use standard GAE
+        self._compute_gae(rollouts, self.gamma, self.gae_lambda)
 
     # ------------------------------------------------------------------
     # GAE computation
@@ -216,11 +251,11 @@ class PPOTrainer:
     ) -> dict:
         """Core PPO logic, separated for sleep/wake wrapping."""
 
-        # Step 1: compute advantages (using value-head estimates)
+        # Step 1: fill value-head estimates and recompute advantages
         for r in rollouts:
             if r.value == 0.0 and hasattr(agent_llm, "get_value"):
                 r.value = agent_llm.get_value(r.prompt, r.response)
-        self._compute_gae(rollouts, self.gamma, self.gae_lambda)
+        self._compute_advantages_for_method(rollouts)
 
         # Step 2: identify LoRA parameters
         model = agent_llm._model

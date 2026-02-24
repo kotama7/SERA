@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sera.learning.rollout import PPORollout
+from sera.learning.rollout import PPORollout, PPORolloutV2
 from sera.search.search_node import SearchNode
 from sera.search.priority import compute_priority
 from sera.utils.checkpoint import save_checkpoint, load_latest_checkpoint
@@ -61,6 +61,8 @@ class SearchManager:
         pruner: Any,
         logger_obj: Any = None,
         checkpoint_dir: str | Path = "./checkpoints",
+        failure_extractor: Any = None,
+        turn_reward_evaluator: Any = None,
     ):
         self.specs = specs
         self.agent_llm = agent_llm
@@ -72,6 +74,8 @@ class SearchManager:
         self.pruner = pruner
         self.logger = logger_obj
         self.checkpoint_dir = Path(checkpoint_dir)
+        self.failure_extractor = failure_extractor
+        self.turn_reward_evaluator = turn_reward_evaluator
 
         # Search state
         self.open_list: list[tuple[float, str]] = []  # (neg_priority, node_id)
@@ -140,6 +144,21 @@ class SearchManager:
                 if operator == "evaluate":
                     await self._evaluate_node(node)
                 elif operator == "debug":
+                    # ECHO: extract failure knowledge before debug
+                    if self.failure_extractor is not None:
+                        try:
+                            summary = self.failure_extractor.extract(node)
+                            # Inject into pending siblings (same parent)
+                            siblings = [
+                                n for n in self.all_nodes.values()
+                                if n.parent_id == node.parent_id
+                                and n.node_id != node.node_id
+                                and n.status in ("pending", "evaluated")
+                            ]
+                            self.failure_extractor.inject(summary, siblings)
+                        except Exception as e:
+                            logger.warning("ECHO extraction failed for node %s: %s", node.node_id[:8], e)
+
                     child = await self.tree_ops.debug(node)
                     node.children_ids.append(child.node_id)
                     self._add_node(child)
@@ -203,17 +222,32 @@ class SearchManager:
                 if self.ppo_trainer.should_update(n_evaluated):
                     try:
                         logger.info("PPO update triggered (buffer size=%d, n_evaluated=%d)", len(self.ppo_buffer), n_evaluated)
-                        rollouts = [
-                            PPORollout(
-                                node_id=entry["node_id"],
-                                prompt=entry.get("hypothesis", ""),
-                                response=str(entry.get("config", {})),
-                                log_prob=0.0,
-                                reward=entry.get("reward", 0.0),
-                                value=0.0,
-                            )
-                            for entry in self.ppo_buffer
-                        ]
+                        rollouts = []
+                        for entry in self.ppo_buffer:
+                            entry_turn_rewards = entry.get("turn_rewards", {})
+                            if entry_turn_rewards:
+                                rollouts.append(
+                                    PPORolloutV2(
+                                        node_id=entry["node_id"],
+                                        prompt=entry.get("hypothesis", ""),
+                                        response=str(entry.get("config", {})),
+                                        log_prob=0.0,
+                                        reward=entry.get("reward", 0.0),
+                                        value=0.0,
+                                        turn_rewards=entry_turn_rewards,
+                                    )
+                                )
+                            else:
+                                rollouts.append(
+                                    PPORollout(
+                                        node_id=entry["node_id"],
+                                        prompt=entry.get("hypothesis", ""),
+                                        response=str(entry.get("config", {})),
+                                        log_prob=0.0,
+                                        reward=entry.get("reward", 0.0),
+                                        value=0.0,
+                                    )
+                                )
                         await self.ppo_trainer.update(rollouts, self.agent_llm, self.specs)
                         self.ppo_buffer.clear()
                     except Exception as e:
@@ -279,17 +313,29 @@ class SearchManager:
             self.closed_set.discard(node.node_id)
             heapq.heappush(self.open_list, (-priority, node.node_id))
 
+            # Compute turn-level rewards if evaluator is available
+            turn_rewards: dict[str, float] = {}
+            if self.turn_reward_evaluator is not None and node.mu is not None:
+                parent_node = self.all_nodes.get(node.parent_id) if node.parent_id else None
+                try:
+                    turn_rewards = self.turn_reward_evaluator.evaluate_all(
+                        node, parent_node, self.all_nodes
+                    )
+                except Exception as e:
+                    logger.warning("Turn reward evaluation failed for node %s: %s", node.node_id[:8], e)
+
             # Add to PPO buffer
             if node.mu is not None:
-                self.ppo_buffer.append(
-                    {
-                        "node_id": node.node_id,
-                        "hypothesis": node.hypothesis,
-                        "config": node.experiment_config,
-                        "reward": node.mu,
-                        "feasible": node.feasible,
-                    }
-                )
+                entry: dict[str, Any] = {
+                    "node_id": node.node_id,
+                    "hypothesis": node.hypothesis,
+                    "config": node.experiment_config,
+                    "reward": node.mu,
+                    "feasible": node.feasible,
+                }
+                if turn_rewards:
+                    entry["turn_rewards"] = turn_rewards
+                self.ppo_buffer.append(entry)
         except Exception as e:
             node.mark_failed(str(e))
             self.closed_set.discard(node.node_id)  # Allow debug operator to pick it up

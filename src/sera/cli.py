@@ -52,6 +52,11 @@ def freeze_specs(
     dtype: str = "bf16",
     agent_llm: str = "local:same_as_base",
     executor: str = "local",
+    gpu_count: int = 1,
+    memory_gb: int = 32,
+    cpu_cores: int = 8,
+    gpu_type: str = "",
+    gpu_required: bool = True,
     timeout: int = 3600,
     no_web: bool = False,
 ):

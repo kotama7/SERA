@@ -191,8 +191,15 @@ Phase 7 の論文生成に関する設定です。
 | `--dtype` | `BaseModelConfig.dtype` | `"bf16"` |
 | `--agent-llm` | `AgentLLMConfig`（`"provider:model_id"` 形式） | `"local:same_as_base"` |
 | `--executor` | `ComputeConfig.executor_type`（`"local"`, `"slurm"`, `"docker"`） | `"local"` |
+| `--gpu-count` | `ComputeConfig.gpu_count` | `1` |
+| `--memory-gb` | `ComputeConfig.memory_gb` | `32` |
+| `--cpu-cores` | `ComputeConfig.cpu_cores` | `8` |
+| `--gpu-type` | `ComputeConfig.gpu_type`（`""`, `"A100"`, `"V100"` 等） | `""` |
+| `--gpu-required` / `--no-gpu-required` | `ComputeConfig.gpu_required` | `True` |
 | `--timeout` | `SandboxConfig.experiment_timeout_sec` | `3600` |
 | `--auto` | Phase 1 で LLM による ProblemSpec 自動生成を有効化 | `False` |
+
+**ComputeConfig → submitit 自動マッピング**: `--executor slurm` の場合、上記の `ComputeConfig` フィールドは submitit のネイティブパラメータ（`slurm_gpus_per_node`, `slurm_mem`, `slurm_cpus_per_task`, `constraint`）に自動変換される。`sbatch_extra` で同じパラメータが指定された場合は `sbatch_extra` が優先される。
 
 ## Phase 1 のロック機構
 
@@ -268,6 +275,119 @@ SERA は API キーの値ではなく、**環境変数名**を `ResourceSpec.api
 | `OPENAI_API_KEY` | OpenAI API 認証（agent_llm で使用時） | `api_keys.openai` |
 | `ANTHROPIC_API_KEY` | Anthropic API 認証（agent_llm で使用時） | `api_keys.anthropic` |
 | `HF_TOKEN` | HuggingFace モデルダウンロード認証 | （ResourceSpec 外で直接参照） |
+
+## PlanSpecModel（研究計画仕様）
+
+`sera.specs.plan_spec.PlanSpecModel` は研究計画・報酬設定・学習手法の選択を管理するモデルです。Phase 1 で凍結されますが、ハッシュロックの対象ではありません。
+
+### RewardConfig（報酬設定）
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `method` | `Literal["outcome_rm", "mt_grpo", "hiper"]` | `"outcome_rm"` | 報酬計算手法。`compute_reward()` がこの値でディスパッチする |
+| `constraint_penalty` | `float` | `10.0` | 制約違反 1 件あたりのペナルティ |
+| `kl_coef_in_reward` | `float` | `0.01` | KL ダイバージェンスの報酬ペナルティ係数 |
+
+`method` の選択肢:
+
+| 手法 | 説明 |
+|------|------|
+| `outcome_rm` | 従来の報酬計算（primary_value - penalties）。デフォルト |
+| `mt_grpo` | Multi-Turn GRPO。ターンレベル報酬の重み付き和（`turn_rewards` が必要） |
+| `hiper` | HiPER 階層的報酬。報酬値は `mt_grpo` と同一だが、Advantage 分解が 3 層階層的になる |
+
+### TurnRewardSpec（ターンレベル報酬設定）
+
+`method` が `mt_grpo` または `hiper` の場合に使用される Phase 毎の報酬評価器定義です。`PlanSpecModel.turn_rewards` に設定します。
+
+```yaml
+turn_rewards:
+  phase_rewards:
+    phase0: { evaluator: "citation_relevance", weight: 0.10 }
+    phase2: { evaluator: "hypothesis_novelty", weight: 0.15 }
+    phase3: { evaluator: "code_executability", weight: 0.25 }
+    phase4: { evaluator: "metric_improvement", weight: 0.35 }
+    phase7: { evaluator: "paper_score_delta",  weight: 0.15 }
+```
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `phase_rewards` | `dict[str, PhaseRewardConfig]` | `{}` | Phase 名 → 報酬評価器の設定 |
+
+**PhaseRewardConfig**:
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `evaluator` | `str` | （必須） | 評価器名（`citation_relevance`, `hypothesis_novelty`, `code_executability`, `metric_improvement`, `paper_score_delta`） |
+| `weight` | `float` | `0.0` | MT-GRPO の重み付き和における重み |
+
+### EchoConfig（ECHO 軽量版設定）
+
+失敗ノードからの知識抽出・兄弟ノードへの注入（ECHO 軽量版）を制御する設定です。`PlanSpecModel.echo` に設定します。
+
+```yaml
+echo:
+  enabled: false
+  max_summaries_per_node: 3
+  summary_max_tokens: 256
+```
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `enabled` | `bool` | `False` | ECHO 機能の有効化。`True` の場合、失敗ノードの知識を兄弟に注入する |
+| `max_summaries_per_node` | `int` | `3` | 1 ノードに注入する最大失敗サマリ数 |
+| `summary_max_tokens` | `int` | `256` | 失敗サマリのエラーメッセージ・教訓の最大トークン長 |
+
+### HiperConfig（HiPER 階層的 Advantage 設定）
+
+`method` が `hiper` の場合に使用される 3 層階層的 Advantage 分解の設定です。`PlanSpecModel.hiper` に設定します。
+
+```yaml
+hiper:
+  switch_level_weight: 0.3
+  high_level_weight: 0.4
+  low_level_weight: 0.3
+  bootstrap_at_boundaries: true
+```
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `switch_level_weight` | `float` | `0.3` | Switch レベル（Phase 間バランス）の Advantage 重み |
+| `high_level_weight` | `float` | `0.4` | High レベル（全体報酬 - 価値）の Advantage 重み |
+| `low_level_weight` | `float` | `0.3` | Low レベル（Phase 平均報酬 - 価値）の Advantage 重み |
+| `bootstrap_at_boundaries` | `bool` | `True` | 境界でのブートストラップを有効にするか |
+
+3 つの重みの合計は 1.0 になるべきです。
+
+### plan_spec.yaml の設定例
+
+```yaml
+reward:
+  method: "mt_grpo"
+  constraint_penalty: 10.0
+  kl_coef_in_reward: 0.01
+
+turn_rewards:
+  phase_rewards:
+    phase0: { evaluator: "citation_relevance", weight: 0.10 }
+    phase2: { evaluator: "hypothesis_novelty", weight: 0.15 }
+    phase3: { evaluator: "code_executability", weight: 0.25 }
+    phase4: { evaluator: "metric_improvement", weight: 0.35 }
+    phase7: { evaluator: "paper_score_delta",  weight: 0.15 }
+
+echo:
+  enabled: true
+  max_summaries_per_node: 3
+  summary_max_tokens: 256
+
+hiper:
+  switch_level_weight: 0.3
+  high_level_weight: 0.4
+  low_level_weight: 0.3
+  bootstrap_at_boundaries: true
+```
+
+**後方互換性**: 旧 YAML にこれらのフィールドがなくても Pydantic デフォルト値で動作します（`method="outcome_rm"`, `echo.enabled=false`, `turn_rewards=None`, `hiper=None`）。
 
 ## 三層変数可変性モデル
 

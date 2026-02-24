@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from sera.execution.executor import Executor, RunResult
-from sera.specs.resource_spec import SlurmConfig
+from sera.specs.resource_spec import ComputeConfig, SlurmConfig
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ class SlurmExecutor(Executor):
         self,
         work_dir: str | Path,
         slurm_config: SlurmConfig,
+        compute_config: ComputeConfig | None = None,
         python_executable: str = "python",
         interpreter_command: str | None = None,
         seed_arg_format: str | None = None,
@@ -99,6 +100,7 @@ class SlurmExecutor(Executor):
 
         self.work_dir = Path(work_dir)
         self.slurm_config = slurm_config
+        self.compute_config = compute_config
         self.python_executable = python_executable
         self.interpreter_command = interpreter_command
         self.seed_arg_format = seed_arg_format
@@ -158,10 +160,17 @@ class SlurmExecutor(Executor):
         if self.slurm_config.account:
             slurm_params["slurm_account"] = self.slurm_config.account
 
-        # Pass sbatch_extra as additional_parameters
+        # --- ComputeConfig auto-mapping (low priority) ---
+        if self.compute_config is not None:
+            compute_params = self._build_compute_params(self.compute_config)
+            gpu_type = compute_params.pop("_gpu_type", "")
+            slurm_params.update(compute_params)
+        else:
+            gpu_type = ""
+
+        # --- sbatch_extra (high priority, overrides compute_params) ---
         additional = {}
         for directive in self.slurm_config.sbatch_extra:
-            # Parse "#SBATCH --key=value" or "--key=value" or "--key value"
             cleaned = directive.lstrip("#").replace("SBATCH", "").strip()
             if "=" in cleaned:
                 key, val = cleaned.split("=", 1)
@@ -169,6 +178,22 @@ class SlurmExecutor(Executor):
             elif " " in cleaned:
                 key, val = cleaned.split(None, 1)
                 additional[key.lstrip("-").strip()] = val.strip()
+
+        # sbatch_extra の gres/gpus-per-node が明示されたら ComputeConfig の
+        # slurm_gpus_per_node を削除（重複回避）
+        if any(k in additional for k in ("gres", "gpus-per-node")):
+            slurm_params.pop("slurm_gpus_per_node", None)
+        elif gpu_type:
+            additional.setdefault("constraint", gpu_type)
+
+        # mem が sbatch_extra で明示されたら ComputeConfig の slurm_mem を削除
+        if "mem" in additional or "mem-per-cpu" in additional:
+            slurm_params.pop("slurm_mem", None)
+
+        # cpus-per-task が sbatch_extra で明示されたら削除
+        if "cpus-per-task" in additional:
+            slurm_params.pop("slurm_cpus_per_task", None)
+
         if additional:
             slurm_params["slurm_additional_parameters"] = additional
 
@@ -254,6 +279,20 @@ class SlurmExecutor(Executor):
         )
 
         return result
+
+    @staticmethod
+    def _build_compute_params(compute_config: ComputeConfig) -> dict:
+        """Map ComputeConfig fields to submitit SLURM parameters."""
+        params: dict = {}
+        if compute_config.gpu_required and compute_config.gpu_count > 0:
+            params["slurm_gpus_per_node"] = compute_config.gpu_count
+        if compute_config.memory_gb > 0:
+            params["slurm_mem"] = f"{compute_config.memory_gb}G"
+        if compute_config.cpu_cores > 0:
+            params["slurm_cpus_per_task"] = compute_config.cpu_cores
+        if compute_config.gpu_type:
+            params["_gpu_type"] = compute_config.gpu_type
+        return params
 
     @staticmethod
     def _check_sacct_available() -> bool:

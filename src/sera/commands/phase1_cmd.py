@@ -69,7 +69,14 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
     )
     model_spec = ModelSpecModel(base_model=base_model_cfg, agent_llm=agent_llm_cfg, adapter_spec=adapter_cfg)
 
-    compute_cfg = ComputeConfig(executor_type=cli_args.get("executor", "local"))
+    compute_cfg = ComputeConfig(
+        executor_type=cli_args.get("executor", "local"),
+        gpu_count=cli_args.get("gpu_count", 1),
+        memory_gb=cli_args.get("memory_gb", 32),
+        cpu_cores=cli_args.get("cpu_cores", 8),
+        gpu_type=cli_args.get("gpu_type", ""),
+        gpu_required=cli_args.get("gpu_required", True),
+    )
     sandbox_cfg = SandboxConfig(experiment_timeout_sec=cli_args.get("timeout", 3600))
     storage_cfg = StorageConfig(work_dir=work_dir)
     network_cfg = NetworkConfig(allow_internet=not cli_args.get("no_web", False))

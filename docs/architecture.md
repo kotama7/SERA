@@ -43,6 +43,7 @@ SERAは2つの同期されたツリー構造を管理する。
 | 探索制御 | `feasible` | `bool` | 制約を全て満たすか |
 | 探索制御 | `debug_depth` | `int` | デバッグ試行回数 |
 | 探索制御 | `error_message` | `str \| None` | 失敗時のエラーメッセージ |
+| ECHO | `failure_context` | `list[dict]` | 失敗兄弟から注入された知識（`FailureSummary.to_dict()` 形式） |
 
 **ノードステータス遷移:**
 
@@ -63,6 +64,12 @@ pending → running → evaluated → expanded
 - `closed_set`: `set[str]` -- 処理済みノードID
 - `best_node`: 最高LCBを持つ実行可能ノード (LCB同値の場合、muが高い方を選択)
 - `ppo_buffer`: `list[dict]` -- 評価済みノードからのPPO学習バッファ
+- `failure_extractor`: ECHO軽量版の失敗知識抽出器 (None可)
+- `turn_reward_evaluator`: Phase毎のターンレベル報酬評価器 (None可)
+
+**ECHO統合**: `failure_extractor` が存在する場合、debugオペレータ実行後に `extract(failed_node)` で失敗知識を抽出し、`inject(summary, siblings)` で兄弟ノードの `failure_context` に注入する。
+
+**ターン報酬統合**: `turn_reward_evaluator` が存在する場合、`_evaluate_node()` 内で `evaluate_all(node, parent, all_nodes)` を呼び出し、Phase毎のターン報酬を計算する。結果はPPOバッファに `PPORolloutV2` として追加される。
 
 **ノード選択ロジック** (`select_next_node`):
 
@@ -190,6 +197,7 @@ sera.search/
   tree_ops                        → Draft/Debug/Improve オペレータ (TreeOps)
   priority                        → compute_priority() + compute_exploration_bonus()
   validation                      → validate_experiment_config() (ホワイトリスト検証)
+  failure_extractor               → FailureKnowledgeExtractor + FailureSummary (ECHO軽量版)
 sera.execution/
   executor                        → Executor ABC + RunResult データクラス
   local_executor                  → LocalExecutor (subprocess ベース)
@@ -201,9 +209,11 @@ sera.evaluation/
   statistical_evaluator           → StatisticalEvaluator (二段階逐次評価)
   feasibility                     → check_feasibility (epsilon制約チェック)
 sera.learning/
-  ppo_trainer                     → PPOTrainer (LoRAパラメータのみ更新)
-  reward                          → compute_reward()
-  rollout                         → PPORollout データクラス
+  ppo_trainer                     → PPOTrainer (LoRAパラメータのみ更新、メソッド別Advantage計算)
+  reward                          → compute_reward() (レジストリパターンで3手法ディスパッチ)
+  rollout                         → PPORollout / PPORolloutV2 データクラス
+  turn_reward                     → TurnRewardEvaluator (Phase毎のターンレベル報酬評価)
+  hierarchical_ppo                → HierarchicalAdvantageEstimator (HiPER 3層Advantage分解)
 sera.lineage/
   lineage_manager                 → LineageManager (デルタ保存、マテリアライゼーション、スカッシュ)
   pruner                          → Pruner (LCB閾値 + パレート + 予算プルーニング)
@@ -318,8 +328,12 @@ Input-1 YAML (ユーザー入力)
        │    │
        │    ├─ Phase 5: PPOTrainer.update()
        │    │    トリガー条件: ppo_trigger_interval ごと or プラトー検出
+       │    │    報酬手法ディスパッチ: plan_spec.reward.method で選択
+       │    │      outcome_rm → 従来のGAE計算
+       │    │      mt_grpo   → ターン報酬反映済みのGAE計算
+       │    │      hiper     → HierarchicalAdvantageEstimator で3層Advantage分解
        │    │    vLLMエンジンのsleep(level=2) → PPO学習 → wake()
-       │    │    GAE計算 → PPOクリップサロゲート損失 + 価値関数損失 + エントロピーボーナス
+       │    │    PPOクリップサロゲート損失 + 価値関数損失 + エントロピーボーナス
        │    │    LoRAパラメータのみ更新 (requires_grad かつ "lora" を含む名前)
        │    │    accelerate.Acceleratorによるデバイス管理 + 勾配クリッピング
        │    │    適応的KL係数制御
@@ -389,7 +403,7 @@ class RunResult:
 
 `StatisticalEvaluator` は `metrics_raw` 内の各dictから `metric_name` キー (例: `"score"`) の値を抽出して mu/SE/LCB を計算する。
 
-### 4.3 PPORollout (sera.learning.rollout)
+### 4.3 PPORollout / PPORolloutV2 (sera.learning.rollout)
 
 ```python
 @dataclass
@@ -402,22 +416,49 @@ class PPORollout:
     value: float            # 価値関数推定値
     advantage: float = 0.0  # GAE計算された利得 (後で充填)
     returns: float = 0.0    # 割引リターン (後で充填)
+
+@dataclass
+class PPORolloutV2(PPORollout):
+    turn_rewards: dict[str, float] = field(default_factory=dict)
+    # MT-GRPO/HiPER用: Phase毎のターンレベル報酬
+    # 例: {"phase0": 0.9, "phase3": 1.0, "phase4": 0.6}
 ```
+
+`PPORolloutV2` は `turn_reward_evaluator` が有効な場合に `SearchManager` で使用される。
 
 ### 4.4 報酬計算 (sera.learning.reward.compute_reward)
 
+`compute_reward()` は **レジストリパターン** で `plan_spec.reward.method` に応じて 3 つの手法にディスパッチする:
+
+| 手法 | 関数 | 説明 |
+|------|------|------|
+| `outcome_rm` | `compute_reward_outcome_rm` | 従来方式（デフォルト） |
+| `mt_grpo` | `compute_reward_mt_grpo` | ターンレベル報酬の重み付き和 |
+| `hiper` | `compute_reward_hiper` | HiPER（報酬値は `mt_grpo` に委譲、Advantage分解はPPOTrainer側） |
+
+**Outcome RM（デフォルト）**:
 ```
 R = primary_value
     - constraint_penalty * num_violated_constraints
     - lambda_cost * normalized_cost
     - kl_coef * kl_divergence
+```
 
-where:
+**MT-GRPO**:
+```
+R = Σ(weight_t * turn_reward_t)
+    - constraint_penalty * num_violated_constraints
+    - lambda_cost * normalized_cost
+    - kl_coef * kl_divergence
+```
+
+共通:
+```
   primary_value    = metrics_raw中のprimaryメトリクス値 (minimize方向なら符号反転)
   normalized_cost  = min(total_cost / budget_limit, 1.0)
   budget_limit     = max_wall_time_hours * 3600 (デフォルト: 14400秒)
 
-失敗/タイムアウト/OOM → -100.0
+失敗/タイムアウト/OOM → -100.0 (全手法共通)
 ```
 
 ### 4.5 Executor ABC (sera.execution.executor)
@@ -438,6 +479,8 @@ class Executor(ABC):
 | `DockerExecutor` | Docker SDK | 未実装 (`NotImplementedError`) |
 
 `LocalExecutor` と `SlurmExecutor` は多言語対応: `interpreter_command` と `seed_arg_format` が設定可能 (Python, R, Julia等)。
+
+`SlurmExecutor` は `compute_config: ComputeConfig | None` を受け取り、`_build_compute_params()` で submitit パラメータに自動マッピングする（`slurm_gpus_per_node`, `slurm_mem`, `slurm_cpus_per_task`, `constraint`）。`sbatch_extra` のユーザー指定値が常に優先される。`compute_config=None` の場合は従来動作と完全互換。
 
 ### 4.6 Evaluator ABC (sera.evaluation.evaluator)
 
@@ -599,3 +642,5 @@ sera research --resume
 | LLMプロバイダ | `AgentLLM` のプロバイダ分岐 | `local` (transformers/vLLM), `openai`, `anthropic` が対応済み |
 | 実験言語 | `ProblemSpec.language` の設定 | `LanguageConfig` で `interpreter_command`, `file_extension`, `seed_arg_format`, `code_block_tag` を設定可能 |
 | プロンプトテンプレート | `TEMPLATE_REGISTRY` に新テンプレート追加 | 21個のテンプレートが登録済み |
+| 報酬手法 | `register_reward_method` デコレータで新手法を登録 | `outcome_rm`, `mt_grpo`, `hiper` が登録済み |
+| Phase報酬評価器 | `TurnRewardEvaluator._PHASE_EVALUATORS` に新評価器を追加 | 5個の評価器が登録済み |

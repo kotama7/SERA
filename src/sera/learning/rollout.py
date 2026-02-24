@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -24,3 +24,14 @@ class PPORollout:
     value: float              # Value function estimate
     advantage: float = 0.0    # GAE-computed advantage (filled later)
     returns: float = 0.0      # Discounted returns (filled later)
+
+
+@dataclass
+class PPORolloutV2(PPORollout):
+    """Extended rollout with turn-level rewards for MT-GRPO / HiPER.
+
+    Inherits all fields from :class:`PPORollout` and adds per-phase
+    turn rewards used by multi-turn and hierarchical reward methods.
+    """
+
+    turn_rewards: dict[str, float] = field(default_factory=dict)

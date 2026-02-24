@@ -100,7 +100,7 @@ Frozen-layer and manipulated-layer variables can have similar names (e.g., `Exec
 | `cli.py` | Typer CLI entry point | `app` |
 | `agent/` | LLM interface (all LLM calls go through here) | `AgentLLM` |
 | `search/` | Best-first tree search | `SearchManager`, `SearchNode`, `TreeOps` |
-| `execution/` | Experiment runners | `Executor` (ABC), `LocalExecutor`, `SlurmExecutor`, `DockerExecutor` |
+| `execution/` | Experiment runners (`SlurmExecutor` auto-maps `ComputeConfig` → submitit params; `sbatch_extra` overrides) | `Executor` (ABC), `LocalExecutor`, `SlurmExecutor`, `DockerExecutor` |
 | `evaluation/` | Statistical evaluation | `Evaluator`, `StatisticalEvaluator`, `FeasibilityChecker` |
 | `learning/` | PPO training (LoRA-only) | `PPOTrainer`, `PPORollout`, `RewardComputer` |
 | `lineage/` | LoRA delta management | `LineageManager`, `LRUCache`, `Pruner` |
@@ -176,7 +176,7 @@ sera_workspace/
 ```
 sera init                   # Initialize workspace from Input-1 YAML
 sera phase0-related-work    # Collect related work
-sera freeze-specs           # Generate & freeze specs
+sera freeze-specs           # Generate & freeze specs (--gpu-count, --memory-gb, --cpu-cores, --gpu-type, --gpu-required)
 sera research               # Run Phases 2-6 loop
 sera generate-paper         # Phase 7
 sera evaluate-paper         # Phase 8

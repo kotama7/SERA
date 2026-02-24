@@ -1,8 +1,16 @@
 """Tests for sera.learning.reward.compute_reward."""
 
+import types
+
 import pytest
 
-from sera.learning.reward import compute_reward
+from sera.learning.reward import (
+    compute_reward,
+    compute_reward_outcome_rm,
+    compute_reward_mt_grpo,
+    compute_reward_hiper,
+    _REWARD_METHODS,
+)
 from sera.search.search_node import SearchNode
 from sera.specs.plan_spec import PlanSpecModel
 from sera.specs.execution_spec import ExecutionSpecModel
@@ -137,3 +145,93 @@ class TestComputeRewardDirection:
         )
         r = compute_reward(node, plan_spec, exec_spec)
         assert r > 0.9
+
+
+# ===================================================================
+# Dispatch tests: method registry + all 3 methods
+# ===================================================================
+
+
+class TestRewardMethodRegistry:
+    """Verify that all three methods are registered and dispatched correctly."""
+
+    def test_all_methods_registered(self):
+        assert "outcome_rm" in _REWARD_METHODS
+        assert "mt_grpo" in _REWARD_METHODS
+        assert "hiper" in _REWARD_METHODS
+
+    def test_dispatch_outcome_rm(self, exec_spec):
+        plan = PlanSpecModel(reward={"method": "outcome_rm"})
+        node = _make_node()
+        r = compute_reward(node, plan, exec_spec)
+        assert 0.84 < r < 0.86
+
+    def test_dispatch_mt_grpo_no_turn_rewards_falls_back(self, exec_spec):
+        """MT-GRPO without turn_rewards should fall back to outcome_rm."""
+        plan = PlanSpecModel(reward={"method": "mt_grpo"})
+        node = _make_node()
+        r_grpo = compute_reward(node, plan, exec_spec)
+        r_orm = compute_reward_outcome_rm(node, plan, exec_spec)
+        assert abs(r_grpo - r_orm) < 1e-9
+
+    def test_dispatch_mt_grpo_with_turn_rewards(self, exec_spec):
+        """MT-GRPO with turn_rewards should use weighted sum."""
+        plan = PlanSpecModel(
+            reward={"method": "mt_grpo"},
+            turn_rewards={
+                "phase_rewards": {
+                    "phase3": {"evaluator": "code_executability", "weight": 0.6},
+                    "phase4": {"evaluator": "metric_improvement", "weight": 0.4},
+                }
+            },
+        )
+        node = _make_node()
+        turn_rewards = {"phase3": 1.0, "phase4": 0.8}
+        r = compute_reward(node, plan, exec_spec, turn_rewards=turn_rewards)
+        # weighted: 0.6*1.0 + 0.4*0.8 = 0.92, minus small penalties
+        assert 0.85 < r < 0.95
+
+    def test_dispatch_hiper_delegates_to_mt_grpo(self, exec_spec):
+        """HiPER reward value is the same as MT-GRPO."""
+        plan = PlanSpecModel(
+            reward={"method": "hiper"},
+            turn_rewards={
+                "phase_rewards": {
+                    "phase3": {"evaluator": "code_executability", "weight": 0.5},
+                    "phase4": {"evaluator": "metric_improvement", "weight": 0.5},
+                }
+            },
+        )
+        node = _make_node()
+        turn_rewards = {"phase3": 0.9, "phase4": 0.7}
+        r_hiper = compute_reward_hiper(node, plan, exec_spec, turn_rewards=turn_rewards)
+        r_grpo = compute_reward_mt_grpo(node, plan, exec_spec, turn_rewards=turn_rewards)
+        assert abs(r_hiper - r_grpo) < 1e-9
+
+    def test_dispatch_unknown_method_falls_back_to_outcome_rm(self, exec_spec):
+        """Unknown method name should fall back to outcome_rm."""
+        plan = types.SimpleNamespace(
+            reward=types.SimpleNamespace(method="nonexistent", constraint_penalty=10.0, kl_coef_in_reward=0.01),
+            turn_rewards=None,
+        )
+        node = _make_node()
+        r = compute_reward(node, plan, exec_spec)
+        r_orm = compute_reward_outcome_rm(node, plan, exec_spec)
+        assert abs(r - r_orm) < 1e-9
+
+    def test_dispatch_no_method_field_defaults_to_outcome_rm(self, exec_spec):
+        """plan_spec.reward without 'method' defaults to outcome_rm."""
+        plan = types.SimpleNamespace(
+            reward=types.SimpleNamespace(constraint_penalty=10.0, kl_coef_in_reward=0.01),
+        )
+        node = _make_node()
+        r = compute_reward(node, plan, exec_spec)
+        r_orm = compute_reward_outcome_rm(node, plan, exec_spec)
+        assert abs(r - r_orm) < 1e-9
+
+    def test_failed_node_all_methods(self, exec_spec):
+        """All methods return -100 for failed nodes."""
+        for method in ("outcome_rm", "mt_grpo", "hiper"):
+            plan = PlanSpecModel(reward={"method": method})
+            node = _make_node(status="failed")
+            assert compute_reward(node, plan, exec_spec) == -100.0

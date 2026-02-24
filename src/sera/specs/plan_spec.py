@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Literal
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -53,6 +53,10 @@ class BranchingConfig(BaseModel):
 class RewardConfig(BaseModel):
     """Reward / scoring configuration for tree search."""
 
+    method: Literal["outcome_rm", "mt_grpo", "hiper"] = Field(
+        "outcome_rm",
+        description="Reward method: outcome_rm (default), mt_grpo (turn-level), hiper (hierarchical)",
+    )
     formula: str = Field(
         "primary_metric - constraint_penalty",
         description="Reward formula (symbolic expression)",
@@ -62,6 +66,39 @@ class RewardConfig(BaseModel):
     cost_source: str = Field("wallclock", description="How cost is measured")
     kl_penalty: bool = Field(True, description="Whether to apply a KL-divergence penalty")
     kl_coef_in_reward: float = Field(0.01, description="KL penalty coefficient in the reward")
+
+
+class PhaseRewardConfig(BaseModel):
+    """Reward evaluator config for a single phase."""
+
+    evaluator: str = Field(..., description="Evaluator name for this phase")
+    weight: float = Field(..., description="Weight of this phase in the total turn reward")
+
+
+class TurnRewardSpec(BaseModel):
+    """MT-GRPO / HiPER: turn-level reward specification per phase."""
+
+    phase_rewards: dict[str, PhaseRewardConfig] = Field(
+        default_factory=dict,
+        description="Phase-keyed reward evaluators and weights",
+    )
+
+
+class EchoConfig(BaseModel):
+    """ECHO lightweight: failure knowledge extraction and injection."""
+
+    enabled: bool = Field(False, description="Enable ECHO failure knowledge extraction")
+    max_summaries_per_node: int = Field(3, description="Max failure summaries injected per node")
+    summary_max_tokens: int = Field(256, description="Max tokens per failure summary")
+
+
+class HiperConfig(BaseModel):
+    """HiPER: 3-layer hierarchical advantage estimation config."""
+
+    switch_level_weight: float = Field(0.3, description="Weight for switch-level advantage")
+    high_level_weight: float = Field(0.4, description="Weight for high-level advantage")
+    low_level_weight: float = Field(0.3, description="Weight for low-level advantage")
+    bootstrap_at_boundaries: bool = Field(True, description="Bootstrap value at phase boundaries")
 
 
 class LoggingConfig(BaseModel):
@@ -91,6 +128,9 @@ class PlanSpecModel(BaseModel):
     reward: RewardConfig = Field(default_factory=RewardConfig, description="Reward configuration")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Logging settings")
     artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig, description="Artefact storage settings")
+    turn_rewards: TurnRewardSpec | None = Field(None, description="MT-GRPO/HiPER turn-level reward spec")
+    echo: EchoConfig = Field(default_factory=EchoConfig, description="ECHO failure knowledge config")
+    hiper: HiperConfig | None = Field(None, description="HiPER hierarchical advantage config")
 
     @model_validator(mode="before")
     @classmethod
