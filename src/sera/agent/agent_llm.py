@@ -214,14 +214,29 @@ class AgentLLM:
                 import torch
 
                 device = next(self._model.parameters()).device
-                inputs = self._tokenizer(prompt, return_tensors="pt").to(device)
+
+                # Apply chat template for instruct models (e.g. Qwen2.5-Coder-7B-Instruct)
+                if hasattr(self._tokenizer, "apply_chat_template"):
+                    messages = [{"role": "user", "content": prompt}]
+                    formatted_prompt = self._tokenizer.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
+                else:
+                    formatted_prompt = prompt
+
+                inputs = self._tokenizer(formatted_prompt, return_tensors="pt").to(device)
+                pad_token_id = (
+                    self._tokenizer.pad_token_id
+                    if self._tokenizer.pad_token_id is not None
+                    else self._tokenizer.eos_token_id
+                )
                 with torch.no_grad():
                     outputs = self._model.generate(
                         **inputs,
                         max_new_tokens=max_tok,
                         temperature=temp,
                         do_sample=(temp > 0),
-                        pad_token_id=self._tokenizer.eos_token_id,
+                        pad_token_id=pad_token_id,
                     )
                 result = self._tokenizer.decode(
                     outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True

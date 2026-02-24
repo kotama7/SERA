@@ -92,13 +92,20 @@ class LocalExecutor(Executor):
         interpreter = self.interpreter_command or self.python_executable
 
         # Build command with configurable seed argument format
-        cmd = [interpreter, str(Path(script_path).resolve())]
         seed_fmt = self.seed_arg_format or "--seed {seed}"
-        if seed_fmt:
-            seed_args = seed_fmt.format(seed=seed).split()
-            cmd.extend(seed_args)
+        seed_args_str = seed_fmt.format(seed=seed) if seed_fmt else ""
 
-        logger.info("Running experiment for node %s: %s", node_id[:8], " ".join(cmd))
+        # Detect if interpreter_command contains shell syntax (spaces, &&, |, etc.)
+        use_shell = interpreter and any(c in interpreter for c in (" ", "&&", "|", ";"))
+
+        if use_shell:
+            cmd = f"{interpreter} {str(Path(script_path).resolve())} {seed_args_str}".strip()
+        else:
+            cmd = [interpreter, str(Path(script_path).resolve())]
+            if seed_args_str:
+                cmd.extend(seed_args_str.split())
+
+        logger.info("Running experiment for node %s: %s", node_id[:8], cmd if isinstance(cmd, str) else " ".join(cmd))
 
         start_time = time.monotonic()
         timed_out = False
@@ -114,6 +121,7 @@ class LocalExecutor(Executor):
                     stdout=stdout_f,
                     stderr=stderr_f,
                     cwd=str(run_dir),
+                    shell=use_shell,
                 )
                 try:
                     exit_code = proc.wait(timeout=timeout_sec)
