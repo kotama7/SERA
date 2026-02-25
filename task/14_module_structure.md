@@ -1,6 +1,6 @@
 # SERA 要件定義書 — モジュール構成
 
-> 本ファイルは TASK.md v12.4 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -90,9 +90,26 @@ src/sera/
 
   agent/                           # エージェントLLM（tool-calling対応）
     __init__.py
-    agent_llm.py                   # AgentLLM（ベースモデル+LoRA管理、推論、tool-calling対応）
+    agent_llm.py                   # AgentLLM（ベースモデル+LoRA管理、推論、call_function統一エントリ）
+    agent_functions.py             # AgentFunctionRegistry + パースユーティリティ（§28）
+    agent_loop.py                  # AgentLoop — ReAct型反復ループ（§29）
+    tool_executor.py               # ToolExecutor — 18ツールディスパッチ（§29）
+    tool_policy.py                 # ToolPolicy — 安全制御・レート制限（§29）
     prompt_templates.py            # 各Phase用プロンプトテンプレート
-    tool_registry.py               # Phase C: ツール定義・実行管理（§26.5）
+    functions/                     # 19関数の定義・ハンドラ（§28）
+      __init__.py
+      search_functions.py          # search_draft, search_debug, search_improve
+      execution_functions.py       # experiment_code_gen
+      spec_functions.py            # spec_generation_problem, spec_generation_plan
+      paper_functions.py           # paper系8関数
+      evaluation_functions.py      # paper_review, paper_review_reflection, meta_review
+      phase0_functions.py          # query_generation, paper_clustering
+    tools/                         # 18ツールのハンドラ実装（§29）
+      __init__.py
+      search_tools.py              # Web/API検索ツール（6個）
+      execution_tools.py           # コード実行ツール（3個）
+      file_tools.py                # ファイルI/Oツール（5個）
+      state_tools.py               # 内部状態参照ツール（4個）
 
   utils/
     __init__.py
@@ -108,6 +125,12 @@ tests/
   test_evaluation/                 # 統計評価テスト
   test_lineage/                    # materialize/squash テスト
   test_paper/                      # 論文生成テスト
+  test_agent/                      # Agent系テスト（§28/§29）
+    test_agent_functions.py        # レジストリ・パース・ハンドラ
+    test_agent_loop.py             # AgentLoop制御・停止条件
+    test_tool_executor.py          # ツールディスパッチ・ポリシー
+    test_tool_policy.py            # 許可/拒否判定
+  test_learning/                   # PPO・報酬・ターン報酬テスト
   test_cli/                        # CLI 統合テスト
   conftest.py                      # pytest フィクスチャ
 ```

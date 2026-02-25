@@ -1,7 +1,7 @@
 
 # SERA 要件定義書 — 目次
 
-> **原本**: `TASK.md` v12.4 を機能単位で分割したもの。
+> **原本**: `TASK.md` v13.0 を機能単位で分割したもの。
 
 ---
 
@@ -17,7 +17,7 @@
 | ファイル | 内容 | 原本セクション |
 |---------|------|--------------|
 | [02_phase0_related_work.md](./02_phase0_related_work.md) | Phase 0: 先行研究フェーズ（Web/API） | §4 |
-| [03_phase1_spec.md](./03_phase1_spec.md) | Phase 1: Spec確定・ExecutionSpec固定 | §5 |
+| [03_phase1_spec.md](./03_phase1_spec.md) | Phase 1: Spec確定・ExecutionSpec固定・agent_commands定義 | §5 |
 | [04_phase2_search.md](./04_phase2_search.md) | Phase 2: 探索木生成（Best-First） | §6 |
 | [05_phase3_execution.md](./05_phase3_execution.md) | Phase 3: 実験実行（Executor） | §7 |
 | [06_phase4_evaluation.md](./06_phase4_evaluation.md) | Phase 4: 統計評価（Evaluator） | §8 |
@@ -50,6 +50,9 @@
 | [18_slurm.md](./18_slurm.md) | SLURM実行パイプライン | §24 |
 | [19_agent_model.md](./19_agent_model.md) | Agentモデル拡張（マルチモデル対応） | §25 |
 | [20_tool_using_agent.md](./20_tool_using_agent.md) | Tool-Using Agent拡張（HiPER + ECHO統合） | §26 |
+| [21_setup_wizard.md](./21_setup_wizard.md) | 対話型セットアップウィザード | §27 |
+| [22_agent_functions.md](./22_agent_functions.md) | Agent Function System（タスク定義 + 統一エントリポイント） | §28 |
+| [23_tool_execution.md](./23_tool_execution.md) | Tool Execution Engine（ツール実行基盤 + AgentLoop + MCP） | §29 |
 
 ---
 
@@ -57,6 +60,12 @@
 
 | バージョン | 変更内容 |
 |-----------|---------|
+| v13.0 | §5.7 PlanSpec に `agent_commands` 追加（§5.8）: ツール18種・関数19種の有効化リスト、Phase別ツールマップ、関数→ツールバインディング、ループ設定をPhase 1で凍結。§20/§22/§23の実装状況を実態（全て実装済み）に更新。全ファイルヘッダをv13.0に統一 |
+| v12.9 | §28/§29/§26 再構成: §28を統一エントリポイント化（allowed_tools/loop_config追加）、§29をツール実行基盤に特化、学習統合を§26.5.3に集約 |
+| v12.8 | §29.14 ツール使用経験からの学習統合追加（PPORolloutV3, ToolCallRecord, tool_aware報酬, HiPER拡張） |
+| v12.7 | §29 Tool Execution Engine追加 |
+| v12.6 | §28 Agent Function Registry追加 |
+| v12.5 | §27 対話型セットアップウィザード追加 |
 | v12.4 | 全面Agent対応更新: §0-§22を tool-calling + MT-GRPO + ECHO軽量版前提に改訂 |
 | v12.3 | §25 Agentモデル拡張、§26 Tool-Using Agent拡張（HiPER+ECHO）追加 |
 | v12.2 | §24 SLURM実行パイプライン追加 |

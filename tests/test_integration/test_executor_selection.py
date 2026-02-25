@@ -52,11 +52,18 @@ class TestResearchCmdExecutorSelection:
             adapter_spec=SimpleNamespace(rank=8, alpha=16, target_modules=["q_proj"]),
             inference=SimpleNamespace(engine="transformers"),
         )
+        plan = SimpleNamespace(
+            search_strategy=SimpleNamespace(name="best_first"),
+            branching=SimpleNamespace(generator="llm"),
+            reward=SimpleNamespace(constraint_penalty=10.0, kl_penalty=False),
+            turn_rewards=SimpleNamespace(enabled=False),
+        )
         return SimpleNamespace(
             resource=resource,
             problem=problem,
             execution=execution,
             model=model,
+            plan=plan,
         )
 
     def test_local_executor_selected(self):

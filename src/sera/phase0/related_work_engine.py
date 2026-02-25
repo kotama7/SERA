@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 import structlog
 
 from sera.phase0.api_clients.base import BaseScholarClient, PaperResult
 from sera.phase0.ranking import citation_norm, compute_ranking_score, rank_papers
-from sera.phase0.clustering import cluster_papers, Cluster
+from sera.phase0.clustering import cluster_papers
 from sera.specs.input1 import Input1Model
 from sera.specs.phase0 import (
+    BaselineCandidate,
     ClusterSpec,
+    OpenProblem,
     PaperScoreSpec,
     PaperSpec,
     RelatedWorkSpec,
@@ -58,7 +60,7 @@ class Phase0Output:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _paper_result_to_spec(p: PaperResult) -> PaperSpec:
+def _paper_result_to_spec(p: PaperResult, query: str = "") -> PaperSpec:
     return PaperSpec(
         paper_id=p.paper_id,
         title=p.title,
@@ -71,6 +73,9 @@ def _paper_result_to_spec(p: PaperResult) -> PaperSpec:
         doi=p.doi,
         arxiv_id=p.arxiv_id,
         source_api=p.source_api,
+        relevance_score=getattr(p, "relevance_score", 0.5),
+        retrieval_query=query,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -150,15 +155,47 @@ class RelatedWorkEngine:
         year_from: int | None,
     ) -> list[PaperResult]:
         """Try each client in priority order; return results from the first that succeeds."""
+        query_id = str(uuid.uuid4())
         for client in self._clients:
+            endpoint = type(client).__name__
+            retry_count = 0
             try:
                 results = await client.search(query, limit=limit, year_from=year_from)
+                # Log query per section 4.5 queries.jsonl schema
+                if self._logger:
+                    self._logger.log({
+                        "event": "api_query",
+                        "query_id": query_id,
+                        "api": endpoint,
+                        "endpoint": endpoint,
+                        "params": {"query": query, "limit": limit, "year_from": year_from},
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "http_status": 200,
+                        "result_count": len(results),
+                        "paper_ids_returned": [r.paper_id for r in results[:20]],
+                        "retry_count": retry_count,
+                    })
                 if results:
                     return results
             except Exception as exc:
+                retry_count += 1
+                if self._logger:
+                    self._logger.log({
+                        "event": "api_query",
+                        "query_id": query_id,
+                        "api": endpoint,
+                        "endpoint": endpoint,
+                        "params": {"query": query, "limit": limit, "year_from": year_from},
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "http_status": 0,
+                        "result_count": 0,
+                        "paper_ids_returned": [],
+                        "retry_count": retry_count,
+                        "error": str(exc),
+                    })
                 logger.warning(
                     "search_client_failed",
-                    client=type(client).__name__,
+                    client=endpoint,
                     query=query,
                     error=str(exc),
                 )
@@ -270,14 +307,46 @@ class RelatedWorkEngine:
                 label=c.label,
                 description=c.description,
                 paper_ids=list(c.paper_ids),
+                keywords=list(getattr(c, "keywords", [])),
             )
             for c in clusters
+        ]
+
+        # Extract baseline candidates (highest-cited papers with methods)
+        top_cited = sorted(top_papers, key=lambda x: x.citation_count, reverse=True)[:5]
+        baseline_candidates = [
+            BaselineCandidate(
+                name=p.title,
+                paper_id=p.paper_id,
+                reported_metric=getattr(input1.goal, "metric", "") if input1.goal else "",
+                method_summary=p.abstract[:200] if p.abstract else "",
+            )
+            for p in top_cited
+        ]
+
+        # Extract common metrics mentioned across papers
+        common_metrics: list[str] = []
+        if input1.goal and hasattr(input1.goal, "metric"):
+            common_metrics.append(input1.goal.metric)
+
+        # Extract open problems from clustering
+        open_problems: list[OpenProblem] = [
+            OpenProblem(
+                description=c.description,
+                related_paper_ids=list(c.paper_ids),
+                severity="medium",
+            )
+            for c in clusters
+            if c.description
         ]
 
         related_work = RelatedWorkSpec(
             papers=paper_specs,
             clusters=cluster_specs,
             scores=paper_scores,
+            baseline_candidates=baseline_candidates,
+            common_metrics=common_metrics,
+            open_problems=open_problems,
         )
 
         teacher_set = TeacherPaperSet(

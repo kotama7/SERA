@@ -93,12 +93,41 @@ Frozen-layer and manipulated-layer variables can have similar names (e.g., `Exec
 
 **API keys**: `ResourceSpecModel.api_keys` stores **environment variable names**, not actual keys. `AgentLLM` reads the env var name then calls `os.environ.get(key_name)`.
 
+### Tool-Using Agent Architecture
+
+The agent layer is a multi-layer system for structured LLM calls with optional tool use:
+
+```
+AgentFunction (schema/registry)
+  └── AgentFunctionRegistry (REGISTRY singleton)
+        └── AgentLLM.call_function() (invoke by name)
+              └── AgentLoop (ReAct loop: Think → Act → Observe)
+                    └── ToolExecutor (dispatches 18 tools)
+                          └── ToolPolicy (safety/rate-limiting)
+```
+
+**AgentFunction / REGISTRY** (`agent/agent_functions.py`): Every structured LLM call is defined as a frozen `AgentFunction` dataclass with `name`, `parameters` (JSON Schema), `return_schema`, `output_mode` (`JSON`/`CODE`/`FREE_TEXT`), `phase`, `default_temperature`, `max_retries`, and a `handler` callable. Functions are registered via `@register_function` decorator into the module-level `REGISTRY` singleton. Importing `sera.agent.functions` triggers all sub-module registrations (side-effect imports). REGISTRY can convert to OpenAI/Anthropic tool formats or inject schemas into prompts.
+
+**19 registered functions** across 6 sub-modules in `agent/functions/`: `phase0_functions` (2), `search_functions` (3), `execution_functions` (1), `spec_functions` (2), `paper_functions` (6), `evaluation_functions` (3).
+
+**`AgentLLM.call_function(function_name, prompt, ...)`** is the primary entry point for structured LLM calls. It looks up the function in REGISTRY, uses native tool-calling for API providers (OpenAI/Anthropic) when `return_schema` is defined, injects schema into prompt text for local providers, applies the function's `handler`, validates output, and retries up to `max_retries` (temperature += 0.1 per retry). This supersedes raw `generate()` for all schema-validated calls.
+
+**`AgentLoop`** (`agent/agent_loop.py`): ReAct (Reason + Act) loop. Calls `agent_llm.generate_with_tools()`, dispatches tool calls via `ToolExecutor`, formats observations, appends to context, repeats. Exit reasons: `"completed"` (no tool calls), `"max_steps"`, `"budget_exhausted"`, `"timeout"`. Config via `AgentLoopConfig`: `max_steps=10`, `tool_call_budget=20`, `timeout_sec=300.0`. Functions not listed in `PlanSpec.agent_commands.functions.function_tool_bindings` are `SINGLE_SHOT` (no loop, single `call_function()`).
+
+**18 tools** in `agent/tools/` across 4 categories: SEARCH (6: semantic_scholar_search/references/citations, crossref_search, arxiv_search, web_search), EXECUTION (3: execute_experiment, execute_code_snippet, run_shell_command), FILE (5: read/write_file, read_metrics, read_experiment_log, list_directory), STATE (4: get_node_info, list_nodes, get_best_node, get_search_stats).
+
+**`ToolPolicy`** (`agent/tool_policy.py`): Per-phase tool allow-lists (`phase_allowed_tools`), write directory whitelist (`runs/`, `paper/`, `outputs/`), blocked write patterns (`specs/*.yaml`, `*.lock`, `*.jsonl`), shell command whitelist (`pip`, `python`, `ls`, `cat`, `wc`), API rate limiting (30 calls/min sliding window), path traversal protection.
+
+**`PlanSpec.agent_commands`**: Configures the agent layer per-research-run. Contains `tools` (enabled tools, phase_tool_map, rate limits), `functions` (available_functions, function_tool_bindings), `loop_defaults`, and `function_loop_overrides` (per-function max_steps/budget/timeout). Frozen at Phase 1.
+
+**Prompt formatters**: `AgentLLM` applies model-family-aware formatting for local providers: `chatml` (Qwen2), `llama3`, `deepseek`, `default`. API providers passthrough.
+
 ### Key Modules
 
 | Module | Purpose | Key Classes |
 |--------|---------|-------------|
 | `cli.py` | Typer CLI entry point | `app` |
-| `agent/` | LLM interface (all LLM calls go through here) | `AgentLLM` |
+| `agent/` | LLM interface + tool-using agent layer | `AgentLLM`, `AgentLoop`, `ToolExecutor`, `ToolPolicy`, `AgentFunctionRegistry` |
 | `search/` | Best-first tree search | `SearchManager`, `SearchNode`, `TreeOps` |
 | `execution/` | Experiment runners (`SlurmExecutor` auto-maps `ComputeConfig` → submitit params; `sbatch_extra` overrides) | `Executor` (ABC), `LocalExecutor`, `SlurmExecutor`, `DockerExecutor` |
 | `evaluation/` | Statistical evaluation | `Evaluator`, `StatisticalEvaluator`, `FeasibilityChecker` |
@@ -108,7 +137,7 @@ Frozen-layer and manipulated-layer variables can have similar names (e.g., `Exec
 | `phase0/` | Related work collection | `RelatedWorkEngine`, API clients |
 | `phase1/` | Spec building & freezing | `SpecBuilder`, `SpecFreezer` |
 | `specs/` | Pydantic spec models | `AllSpecs`, `ExecutionSpecModel`, `ProblemSpecModel`, etc. |
-| `commands/` | CLI command handlers | `init_cmd`, `phase0_cmd`, `research_cmd`, `paper_cmd`, etc. |
+| `commands/` | CLI command handlers | `init_cmd`, `phase0_cmd`, `research_cmd`, `paper_cmd`, `setup_cmd` |
 
 ### Key Interfaces
 
@@ -117,7 +146,7 @@ Frozen-layer and manipulated-layer variables can have similar names (e.g., `Exec
 - `metrics_path` points to `runs/<node_id>/metrics.json` — the only output channel from experiment scripts back to the evaluator
 - Exit codes: `0`=ok, `-9`=timeout, `-7`=OOM (SERA-specific sentinel), `137`=Linux OOM killer
 
-**LLM → JSON contract**: Every prompt ends with "Output ONLY the JSON, no other text." Parsing in `TreeOps._parse_json_response()` uses 3-stage fallback: (1) extract from ```json fence, (2) raw JSON parse, (3) regex for `[...]`/`{...}`. After 3 retries (temperature += 0.1 each), a hardcoded fallback node is returned.
+**LLM → JSON contract**: Every prompt ends with "Output ONLY the JSON, no other text." Parsing uses 3-stage fallback: (1) extract from ```json fence, (2) raw JSON parse, (3) regex for `[...]`/`{...}`. Canonical implementations are in `agent_functions.py` (`parse_json_response`, `extract_code_block`, `validate_against_schema`). `tree_ops.py` has its own copy used at runtime for search. After 3 retries (temperature += 0.1 each), a hardcoded fallback node is returned.
 
 **Dual prompt systems**: `prompt_templates.py` defines 21 templates in `TEMPLATE_REGISTRY` (richly structured, for the full pipeline). `tree_ops.py` defines its own `DRAFT_PROMPT`/`DEBUG_PROMPT`/`IMPROVE_PROMPT` that are actually used at runtime. When modifying search prompts, edit the ones in `tree_ops.py`.
 
@@ -130,6 +159,8 @@ sera_workspace/
   specs/                          # 10 YAML files + .lock
   logs/
     agent_llm_log.jsonl           # Every LLM call
+    agent_loop_log.jsonl          # Every AgentLoop completion
+    tool_execution_log.jsonl      # Every tool call execution
     search_log.jsonl              # Every node processed
     ppo_log.jsonl                 # Every PPO update
   checkpoints/
@@ -160,6 +191,10 @@ sera_workspace/
 
 **Signal handling**: `SearchManager` traps SIGINT → saves checkpoint → exits with code 20 (distinguishes graceful stop from crash).
 
+### LLM Dependency Injection Pattern
+
+When a module only needs simple text generation (not schema validation or tool use), it accepts `agent_llm` as a `Callable[[str], Awaitable[str]]` rather than the full `AgentLLM` instance (e.g., `phase0/clustering.py`). Use `call_function()` for structured/validated calls, simple callables for free-text.
+
 ### Concurrency
 
 - Phase 0: `asyncio` with per-provider rate limiters
@@ -175,6 +210,7 @@ sera_workspace/
 
 ```
 sera init                   # Initialize workspace from Input-1 YAML
+sera setup                  # Interactive wizard (--lang en/ja, --resume, --from-input1, --skip-phase0)
 sera phase0-related-work    # Collect related work
 sera freeze-specs           # Generate & freeze specs (--gpu-count, --memory-gb, --cpu-cores, --gpu-type, --gpu-required)
 sera research               # Run Phases 2-6 loop
@@ -186,6 +222,8 @@ sera show-node <id>         # Show node details
 sera replay <id> <seed>     # Replay experiment
 sera validate-specs         # Validate spec integrity
 ```
+
+**Setup wizard** (`setup_cmd.py`): 11-step interactive flow via `rich` console. Phase A (steps 1-7) collects Input-1 data interactively, Phase B (8-9) runs Phase 0 with review, Phase C (10-11) detects GPU/SLURM environment and freezes specs. Bilingual (ja/en via `MESSAGES` dict). Resumable via `.wizard_state.json`.
 
 ## Testing Patterns
 
@@ -199,6 +237,8 @@ Key shared fixtures in `tests/conftest.py`:
 agent_llm.set_mock(lambda prompt, purpose: f"mock:{purpose}")
 ppo_trainer.set_mock(lambda rollouts: {"mean_reward": 0.5})
 ```
+
+**Agent-layer tests** (`tests/test_agent/`): Use `AsyncMock` for `AgentLLM` (mock `generate_with_tools` as `AsyncMock` with `.return_value` or `.side_effect` lists). The `ToolExecutor` and `AgentLoop` tests mock `SearchManager` with `SimpleNamespace` (consistent with spec mock pattern).
 
 **Duck-typed spec mocks**: Tests use `types.SimpleNamespace` instead of real Pydantic models, since components read specs via `getattr(obj, "field", default)` with two-level fallback patterns. This makes tests lightweight:
 ```python

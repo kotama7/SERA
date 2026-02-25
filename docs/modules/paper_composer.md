@@ -31,7 +31,7 @@ Phase 7 の論文生成を担当するモジュール群のドキュメント。
 | `bib_entries` | `list[dict]` | 参考文献エントリ |
 | `metadata` | `dict` | メタデータ（output_dir, paper_path 等） |
 
-出力先: `paper/paper.md`
+出力先: `paper/paper.md`, `paper/paper.bib`, `paper/figure_descriptions.json`
 
 ---
 
@@ -88,6 +88,8 @@ def __init__(self, output_dir: str | Path, n_writeup_reflections: int = 3)
 
 VLM が有効な場合のみ実行。各図に対して `vlm.describe_figures(figures)` を呼び出し、`{filename: description}` の辞書を返す。VLM が無効（`None` または `enabled == False`）の場合は空辞書。
 
+結果は `figure_descriptions.json` としてディスクに保存される（indent=2）。
+
 #### Step 5: 論文本文生成 + リフレクション (_step5_paper_body)
 
 3 段階で論文本文を生成する。
@@ -116,6 +118,7 @@ VLM が有効な場合: 最初の 3 図に対して `vlm.review_figure_caption_r
 1. **図の番号付け**: 各図の画像参照を `![Figure N: caption](filename)` 形式にリナンバリング
 2. **引用キーの一貫性確認**: BibTeX エントリのキーと本文内の `\cite{}` の整合性を確認
 3. **参考文献セクションの追加**: `# References` セクションが存在しない場合、末尾に `## References` を追加。各エントリのフォーマット: `[key] title by authors (year)`
+4. **BibTeX ファイル出力**: `paper/paper.bib` に全 bib_entries を `@article` 形式で書き出し。著者は `" and "` で結合
 
 ---
 
@@ -268,3 +271,29 @@ def __init__(self, model: str | None = None, provider: str | None = None)
 - 各ペアに対して VLM で類似度（0.0-1.0）と推奨（`keep_both` / `merge` / `remove_one`）を取得
 - 類似度 > 0.5 のペアを結果に含める
 - 無効時または図が 2 枚未満の場合は空リストを返す
+
+---
+
+## 出力ファイル一覧
+
+| ファイル | 生成ステップ | 内容 |
+|---------|------------|------|
+| `paper/paper.md` | Step 5-6 | 論文本文（Markdown 形式） |
+| `paper/paper.bib` | Step 6 | 参考文献（BibTeX 形式） |
+| `paper/figure_descriptions.json` | Step 4 | VLM による各図の説明（`{filename: description}` 形式） |
+| `paper/experiment_summaries.json` | Step 1 | 実験サマリーと最良ノード情報 |
+| `paper/figures/*.png` | Step 2 | 生成された図表（CI バーチャート、収束曲線等） |
+
+### paper.bib フォーマット
+
+```bibtex
+@article{citation_key,
+  title = {Title of the Paper},
+  author = {Author1 and Author2 and Author3},
+  year = {2024},
+  journal = {Venue Name},
+  doi = {10.xxxx/xxxxx},
+}
+```
+
+各 bib_entry の `citation_key` は `CitationSearcher` が生成する `{lastname}{year}` 形式。著者は `" and "` で結合される。

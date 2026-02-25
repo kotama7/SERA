@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 from sera.phase0.api_clients.base import PaperResult
 
@@ -17,6 +17,7 @@ class Cluster:
     label: str
     description: str = ""
     paper_ids: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
 
 
 def _build_cluster_prompt(papers: list[PaperResult]) -> str:
@@ -34,6 +35,7 @@ def _build_cluster_prompt(papers: list[PaperResult]) -> str:
         "cluster them into thematic groups. Return ONLY valid JSON with the "
         "following schema:\n\n"
         '[\n  {"label": "Group Name", "description": "Brief description", '
+        '"keywords": ["keyword1", "keyword2"], '
         '"paper_ids": ["id1", "id2"]}\n]\n\n'
         f"Papers:\n{papers_text}\n\n"
         "Respond with JSON only, no markdown fences."
@@ -56,12 +58,13 @@ def _parse_clusters_json(raw: str, papers: list[PaperResult]) -> list[Cluster]:
     for item in data:
         label = item.get("label", "Unnamed")
         description = item.get("description", "")
+        keywords = item.get("keywords", [])
         raw_ids = item.get("paper_ids", [])
         # Only include paper_ids that exist in our paper list
         paper_ids = [pid for pid in raw_ids if pid in valid_ids]
         if paper_ids:
             clusters.append(
-                Cluster(label=label, description=description, paper_ids=paper_ids)
+                Cluster(label=label, description=description, paper_ids=paper_ids, keywords=keywords)
             )
     return clusters
 

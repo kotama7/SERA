@@ -47,70 +47,20 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
     paper_score_spec = load_spec("paper_score_spec.yaml", PaperScoreSpecModel, "paper_score_spec")
     teacher_papers = load_spec("teacher_paper_set.yaml", TeacherPaperSetModel, "teacher_paper_set")
 
-    # Build ModelSpec and ResourceSpec from CLI args
-    from sera.specs.model_spec import ModelSpecModel, BaseModelConfig, AgentLLMConfig, AdapterSpec
-    from sera.specs.resource_spec import ResourceSpecModel, ComputeConfig, SandboxConfig, StorageConfig, NetworkConfig
+    # Build ModelSpec, ResourceSpec, ExecutionSpec via SpecBuilder
+    from sera.phase1.spec_builder import SpecBuilder
+    from sera.specs.model_spec import ModelSpecModel
+    from sera.specs.resource_spec import ResourceSpecModel
+    from sera.specs.execution_spec import ExecutionSpecModel
 
-    base_model_cfg = BaseModelConfig(
-        id=cli_args.get("base_model", "Qwen/Qwen2.5-Coder-7B-Instruct"),
-        dtype=cli_args.get("dtype", "bf16"),
-    )
+    # SpecBuilder needs an agent_llm, but for spec construction it's not used
+    # (only for ProblemSpec/PlanSpec LLM generation). Use None placeholder.
+    builder = SpecBuilder(agent_llm=None)
+    cli_args_with_workdir = {**cli_args, "work_dir": work_dir}
 
-    agent_llm_str = cli_args.get("agent_llm", "local:same_as_base")
-    if ":" in agent_llm_str:
-        provider, model_id = agent_llm_str.split(":", 1)
-    else:
-        provider, model_id = "local", "same_as_base"
-
-    agent_llm_cfg = AgentLLMConfig(provider=provider, model_id=model_id)
-    adapter_cfg = AdapterSpec(
-        rank=cli_args.get("rank", 16),
-        alpha=cli_args.get("alpha", 32),
-    )
-    model_spec = ModelSpecModel(base_model=base_model_cfg, agent_llm=agent_llm_cfg, adapter_spec=adapter_cfg)
-
-    compute_cfg = ComputeConfig(
-        executor_type=cli_args.get("executor", "local"),
-        gpu_count=cli_args.get("gpu_count", 1),
-        memory_gb=cli_args.get("memory_gb", 32),
-        cpu_cores=cli_args.get("cpu_cores", 8),
-        gpu_type=cli_args.get("gpu_type", ""),
-        gpu_required=cli_args.get("gpu_required", True),
-    )
-    sandbox_cfg = SandboxConfig(experiment_timeout_sec=cli_args.get("timeout", 3600))
-    storage_cfg = StorageConfig(work_dir=work_dir)
-    network_cfg = NetworkConfig(allow_internet=not cli_args.get("no_web", False))
-    resource_spec = ResourceSpecModel(
-        compute=compute_cfg, sandbox=sandbox_cfg, storage=storage_cfg, network=network_cfg,
-    )
-
-    # Build ExecutionSpec from CLI args
-    from sera.specs.execution_spec import (
-        ExecutionSpecModel, SearchConfig, EvaluationConfig,
-        LearningConfig, LoraRuntimeConfig, PruningConfig, TerminationConfig, PaperExecConfig,
-    )
-
-    search_cfg = SearchConfig(
-        max_nodes=cli_args.get("max_nodes", 100),
-        max_depth=cli_args.get("max_depth", 10),
-        branch_factor=cli_args.get("branch_factor", 3),
-        lambda_cost=cli_args.get("lambda_cost", 0.1),
-        beta_exploration=cli_args.get("beta", 0.05),
-        repeats=cli_args.get("repeats", 3),
-        lcb_coef=cli_args.get("lcb_coef", 1.96),
-        sequential_eval=not cli_args.get("no_sequential", False),
-        sequential_eval_topk=cli_args.get("seq_topk", 5),
-    )
-    eval_cfg = EvaluationConfig()
-    learn_cfg = LearningConfig(
-        lr=cli_args.get("lr", 1e-4),
-        clip_range=cli_args.get("clip", 0.2),
-        steps_per_update=cli_args.get("ppo_steps", 128),
-    )
-
-    exec_spec = ExecutionSpecModel(
-        search=search_cfg, evaluation=eval_cfg, learning=learn_cfg,
-    )
+    model_spec = ModelSpecModel(**builder.build_model_spec(cli_args_with_workdir))
+    resource_spec = ResourceSpecModel(**builder.build_resource_spec(cli_args_with_workdir))
+    exec_spec = ExecutionSpecModel(**builder.build_execution_spec(cli_args_with_workdir))
 
     # Build ProblemSpec and PlanSpec
     from sera.specs.problem_spec import ProblemSpecModel
@@ -123,20 +73,19 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
     # If problem_spec is default (no manipulated_variables), try to build via LLM
     if auto and not problem_spec.manipulated_variables:
         from sera.agent.agent_llm import AgentLLM
-        from sera.phase1.spec_builder import SpecBuilder
 
         log_path = workspace / "logs" / "agent_llm_log.jsonl"
         agent_llm = AgentLLM(model_spec, resource_spec, log_path)
-        builder = SpecBuilder(agent_llm)
+        llm_builder = SpecBuilder(agent_llm)
 
         try:
-            problem_data = asyncio.run(builder.build_problem_spec(input1, related_work))
+            problem_data = asyncio.run(llm_builder.build_problem_spec(input1, related_work))
             problem_spec = ProblemSpecModel(**problem_data)
         except Exception as e:
             console.print(f"[yellow]LLM ProblemSpec generation failed ({e}), using defaults[/yellow]")
 
         try:
-            plan_data = asyncio.run(builder.build_plan_spec(input1, problem_spec))
+            plan_data = asyncio.run(llm_builder.build_plan_spec(input1, problem_spec))
             plan_spec = PlanSpecModel(**plan_data)
         except Exception:
             pass

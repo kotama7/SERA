@@ -22,6 +22,32 @@ from sera.utils.checkpoint import save_checkpoint, load_latest_checkpoint
 logger = logging.getLogger(__name__)
 
 
+def sync_adapter_assignment(
+    search_node: SearchNode,
+    ppo_updated: bool,
+    new_adapter_node_id: str | None,
+    all_nodes: dict[str, SearchNode],
+) -> None:
+    """Synchronise search-tree node with LoRA lineage tree (section 9.1.1).
+
+    Three rules:
+    1. No PPO update -> inherit parent's adapter_node_id.
+    2. PPO updated -> set the new adapter_node_id.
+    3. Root node (parent_id is None) -> adapter_node_id = "adapter_root".
+    """
+    if search_node.parent_id is None:
+        # Rule 3: Root nodes get adapter_root
+        search_node.adapter_node_id = "adapter_root"
+    elif ppo_updated and new_adapter_node_id is not None:
+        # Rule 2: PPO update produced a new adapter
+        search_node.adapter_node_id = new_adapter_node_id
+    else:
+        # Rule 1: Inherit parent's adapter_node_id
+        parent = all_nodes.get(search_node.parent_id)
+        if parent and parent.adapter_node_id:
+            search_node.adapter_node_id = parent.adapter_node_id
+
+
 class SearchManager:
     """Best-first search manager for the SERA research loop.
 
@@ -248,7 +274,19 @@ class SearchManager:
                                         value=0.0,
                                     )
                                 )
-                        await self.ppo_trainer.update(rollouts, self.agent_llm, self.specs)
+                        ppo_result = await self.ppo_trainer.update(rollouts, self.agent_llm, self.specs)
+
+                        # If PPO produced a new adapter, update nodes' adapter_node_ids
+                        new_adapter_id = ppo_result.get("new_adapter_node_id") if isinstance(ppo_result, dict) else None
+                        if new_adapter_id:
+                            for entry in self.ppo_buffer:
+                                nid = entry["node_id"]
+                                if nid in self.all_nodes:
+                                    sync_adapter_assignment(
+                                        self.all_nodes[nid], True, new_adapter_id, self.all_nodes
+                                    )
+                            logger.info("Assigned new adapter %s to %d nodes", new_adapter_id[:8], len(self.ppo_buffer))
+
                         self.ppo_buffer.clear()
                     except Exception as e:
                         logger.error("PPO update failed: %s", e)
@@ -490,6 +528,9 @@ class SearchManager:
 
     def _add_node(self, node: SearchNode) -> None:
         """Add a node to the search tree and open list."""
+        # Sync adapter_node_id with lineage tree (section 9.1.1)
+        sync_adapter_assignment(node, False, None, self.all_nodes)
+
         self.all_nodes[node.node_id] = node
         priority = compute_priority(node, self.specs.execution)
         node.priority = priority

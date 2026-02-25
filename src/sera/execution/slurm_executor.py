@@ -8,11 +8,13 @@ Install the optional dependency: ``pip install sera[slurm]``
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from sera.execution.executor import Executor, RunResult
 from sera.specs.resource_spec import ComputeConfig, SlurmConfig
@@ -279,6 +281,481 @@ class SlurmExecutor(Executor):
         )
 
         return result
+
+    # ------------------------------------------------------------------
+    # Async batch execution methods
+    # ------------------------------------------------------------------
+
+    async def submit_async(
+        self,
+        node_id: str,
+        script_path: Path,
+        seed: int,
+        timeout_sec: int | None = None,
+    ) -> Any:
+        """Submit a SLURM job and return a handle immediately (non-blocking).
+
+        Submits the experiment script as a SLURM job via submitit and returns
+        a dict containing the submitit job object and associated metadata.
+        The caller can later pass this handle to :meth:`collect_result` to
+        retrieve the :class:`RunResult`.
+
+        Parameters
+        ----------
+        node_id : str
+            Search node identifier.
+        script_path : Path
+            Path to the experiment script.
+        seed : int
+            Random seed passed to the experiment.
+        timeout_sec : int | None
+            Maximum wall-clock seconds. Stored in the handle for later use
+            during result collection.
+
+        Returns
+        -------
+        dict
+            A handle dict with keys: ``job``, ``node_id``, ``seed``,
+            ``run_dir``, ``start_time``, ``timeout_sec``, ``slurm_log_dir``,
+            ``stdout_path``, ``stderr_path``, ``metrics_path``.
+        """
+        import submitit
+
+        # Set up run directory
+        run_dir = self.work_dir / "runs" / node_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        stdout_path = run_dir / "stdout.log"
+        stderr_path = run_dir / "stderr.log"
+        metrics_path = run_dir / "metrics.json"
+
+        # Configure submitit executor
+        slurm_log_dir = run_dir / "slurm_logs"
+        slurm_log_dir.mkdir(parents=True, exist_ok=True)
+
+        executor = submitit.AutoExecutor(folder=str(slurm_log_dir))
+
+        # Parse time_limit to minutes for submitit
+        slurm_timeout_min = self._parse_time_limit(self.slurm_config.time_limit)
+
+        slurm_params: dict = {
+            "slurm_partition": self.slurm_config.partition,
+            "slurm_time": slurm_timeout_min,
+            "slurm_job_name": f"sera-{node_id[:8]}",
+        }
+        if self.slurm_config.account:
+            slurm_params["slurm_account"] = self.slurm_config.account
+
+        # --- ComputeConfig auto-mapping (low priority) ---
+        if self.compute_config is not None:
+            compute_params = self._build_compute_params(self.compute_config)
+            gpu_type = compute_params.pop("_gpu_type", "")
+            slurm_params.update(compute_params)
+        else:
+            gpu_type = ""
+
+        # --- sbatch_extra (high priority, overrides compute_params) ---
+        additional = {}
+        for directive in self.slurm_config.sbatch_extra:
+            cleaned = directive.lstrip("#").replace("SBATCH", "").strip()
+            if "=" in cleaned:
+                key, val = cleaned.split("=", 1)
+                additional[key.lstrip("-").strip()] = val.strip()
+            elif " " in cleaned:
+                key, val = cleaned.split(None, 1)
+                additional[key.lstrip("-").strip()] = val.strip()
+
+        if any(k in additional for k in ("gres", "gpus-per-node")):
+            slurm_params.pop("slurm_gpus_per_node", None)
+        elif gpu_type:
+            additional.setdefault("constraint", gpu_type)
+
+        if "mem" in additional or "mem-per-cpu" in additional:
+            slurm_params.pop("slurm_mem", None)
+
+        if "cpus-per-task" in additional:
+            slurm_params.pop("slurm_cpus_per_task", None)
+
+        if additional:
+            slurm_params["slurm_additional_parameters"] = additional
+
+        executor.update_parameters(**slurm_params)
+
+        # Submit the job
+        script_abs = str(Path(script_path).resolve())
+        interpreter = self.interpreter_command or self.python_executable
+        seed_fmt = self.seed_arg_format or "--seed {seed}"
+
+        logger.info(
+            "Async submitting SLURM job for node %s (seed=%d): partition=%s, time_limit=%s",
+            node_id[:8],
+            seed,
+            self.slurm_config.partition,
+            self.slurm_config.time_limit,
+        )
+
+        start_time = time.monotonic()
+        job = executor.submit(
+            _run_experiment,
+            interpreter,
+            script_abs,
+            seed,
+            str(run_dir),
+            self.slurm_config.modules,
+            seed_fmt,
+        )
+
+        logger.info(
+            "SLURM job %s submitted (async) for node %s (seed=%d)",
+            job.job_id,
+            node_id[:8],
+            seed,
+        )
+
+        return {
+            "job": job,
+            "node_id": node_id,
+            "seed": seed,
+            "run_dir": run_dir,
+            "start_time": start_time,
+            "timeout_sec": timeout_sec,
+            "slurm_log_dir": slurm_log_dir,
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+            "metrics_path": metrics_path,
+        }
+
+    async def collect_result(
+        self,
+        node_id: str,
+        job: Any,
+        start_time: float,
+        timeout_sec: int | None = None,
+        *,
+        run_dir: Path | None = None,
+        slurm_log_dir: Path | None = None,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
+        metrics_path: Path | None = None,
+        seed: int = 0,
+    ) -> RunResult:
+        """Poll a submitted SLURM job for completion and return a RunResult.
+
+        Given a submitit job handle (as returned within the dict from
+        :meth:`submit_async`), this method asynchronously polls for job
+        completion using ``asyncio.sleep`` between poll intervals, then
+        collects logs and builds a :class:`RunResult`.
+
+        Parameters
+        ----------
+        node_id : str
+            Search node identifier.
+        job : Any
+            The submitit job object.
+        start_time : float
+            Monotonic timestamp from when the job was submitted.
+        timeout_sec : int | None
+            Maximum wall-clock seconds to wait.
+        run_dir : Path | None
+            Run directory for this node. Defaults to
+            ``{work_dir}/runs/{node_id}``.
+        slurm_log_dir : Path | None
+            SLURM log directory. Defaults to ``{run_dir}/slurm_logs``.
+        stdout_path : Path | None
+            Path for stdout log. Defaults to ``{run_dir}/stdout.log``.
+        stderr_path : Path | None
+            Path for stderr log. Defaults to ``{run_dir}/stderr.log``.
+        metrics_path : Path | None
+            Path to metrics.json. Defaults to ``{run_dir}/metrics.json``.
+        seed : int
+            Random seed used for this run.
+
+        Returns
+        -------
+        RunResult
+            The result of the experiment run.
+        """
+        # Resolve default paths
+        if run_dir is None:
+            run_dir = self.work_dir / "runs" / node_id
+        if slurm_log_dir is None:
+            slurm_log_dir = run_dir / "slurm_logs"
+        if stdout_path is None:
+            stdout_path = run_dir / "stdout.log"
+        if stderr_path is None:
+            stderr_path = run_dir / "stderr.log"
+        if metrics_path is None:
+            metrics_path = run_dir / "metrics.json"
+
+        # Async polling loop
+        timed_out = False
+        exit_code = -1
+
+        try:
+            exit_code = await self._async_poll_job(job, timeout_sec, start_time)
+        except TimeoutError:
+            timed_out = True
+            exit_code = -9
+            self._cancel_job(job)
+            logger.warning(
+                "SLURM job %s timed out for node %s", job.job_id, node_id[:8]
+            )
+        except Exception as exc:
+            logger.error(
+                "SLURM job %s failed for node %s: %s", job.job_id, node_id[:8], exc
+            )
+            if not stderr_path.exists():
+                stderr_path.write_text(f"SlurmExecutor error: {exc}\n")
+            exit_code = 1
+
+        wall_time = time.monotonic() - start_time
+
+        # Copy submitit logs if stdout/stderr weren't written by the job
+        self._collect_submitit_logs(job, slurm_log_dir, stdout_path, stderr_path)
+
+        # OOM detection
+        if not timed_out and exit_code != 0:
+            is_oom = self._detect_oom(job, exit_code, stderr_path)
+            if is_oom:
+                exit_code = -7
+                logger.warning(
+                    "OOM detected for node %s (SLURM job %s)",
+                    node_id[:8],
+                    job.job_id,
+                )
+
+        # Check for metrics file
+        found_metrics = metrics_path if metrics_path.exists() else None
+        success = exit_code == 0 and not timed_out
+
+        result = RunResult(
+            node_id=node_id,
+            success=success,
+            exit_code=exit_code,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            metrics_path=found_metrics,
+            artifacts_dir=run_dir,
+            wall_time_sec=wall_time,
+            seed=seed,
+        )
+
+        logger.info(
+            "Node %s SLURM job %s collected: exit_code=%d, success=%s, wall_time=%.1fs",
+            node_id[:8],
+            job.job_id,
+            exit_code,
+            success,
+            wall_time,
+        )
+
+        return result
+
+    async def run_batch(self, tasks: list[dict]) -> list[RunResult]:
+        """Submit and collect multiple SLURM jobs as a batch.
+
+        Implements a three-phase async batch pipeline:
+
+        - **Phase A** -- Submit all jobs (non-blocking, returns handles).
+        - **Phase B** -- Poll all jobs until completion using async sleep.
+        - **Phase C** -- Collect results from all completed jobs in parallel
+          via ``asyncio.gather``.
+
+        Parameters
+        ----------
+        tasks : list[dict]
+            Each dict must contain keys: ``node_id`` (str),
+            ``script_path`` (Path), ``seed`` (int), ``timeout_sec``
+            (int | None).
+
+        Returns
+        -------
+        list[RunResult]
+            One ``RunResult`` per task, in the same order as *tasks*.
+        """
+        if not tasks:
+            return []
+
+        # Phase A: Submit all jobs
+        logger.info("Batch Phase A: submitting %d SLURM jobs", len(tasks))
+        handles: list[dict] = []
+        for task in tasks:
+            handle = await self.submit_async(
+                node_id=task["node_id"],
+                script_path=task["script_path"],
+                seed=task["seed"],
+                timeout_sec=task.get("timeout_sec"),
+            )
+            handles.append(handle)
+        logger.info(
+            "Batch Phase A complete: %d jobs submitted (job IDs: %s)",
+            len(handles),
+            ", ".join(str(h["job"].job_id) for h in handles),
+        )
+
+        # Phase B: Poll all jobs until all are finished (async sleep between polls)
+        logger.info("Batch Phase B: polling %d jobs for completion", len(handles))
+        pending_indices = set(range(len(handles)))
+
+        while pending_indices:
+            await asyncio.sleep(self.poll_interval_sec)
+
+            still_pending = set()
+            for idx in pending_indices:
+                h = handles[idx]
+                job = h["job"]
+                try:
+                    state = job.state
+                except Exception:
+                    # If state query fails, keep polling
+                    still_pending.add(idx)
+                    continue
+
+                if state in ("COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"):
+                    logger.info(
+                        "SLURM job %s (node %s) reached terminal state: %s",
+                        job.job_id,
+                        h["node_id"][:8],
+                        state,
+                    )
+                else:
+                    still_pending.add(idx)
+
+                # Also check Python-side timeout
+                timeout_sec = h.get("timeout_sec")
+                if timeout_sec is not None:
+                    elapsed = time.monotonic() - h["start_time"]
+                    if elapsed >= timeout_sec and idx in still_pending:
+                        logger.warning(
+                            "SLURM job %s (node %s) exceeded Python timeout %.0fs, cancelling",
+                            job.job_id,
+                            h["node_id"][:8],
+                            timeout_sec,
+                        )
+                        self._cancel_job(job)
+                        still_pending.discard(idx)
+
+            pending_indices = still_pending
+
+            if pending_indices:
+                logger.info(
+                    "Batch Phase B: %d jobs still pending", len(pending_indices)
+                )
+
+        logger.info("Batch Phase B complete: all jobs reached terminal state")
+
+        # Phase C: Collect all results in parallel
+        logger.info("Batch Phase C: collecting results from %d jobs", len(handles))
+
+        async def _collect_one(handle: dict) -> RunResult:
+            return await self.collect_result(
+                node_id=handle["node_id"],
+                job=handle["job"],
+                start_time=handle["start_time"],
+                timeout_sec=handle.get("timeout_sec"),
+                run_dir=handle["run_dir"],
+                slurm_log_dir=handle["slurm_log_dir"],
+                stdout_path=handle["stdout_path"],
+                stderr_path=handle["stderr_path"],
+                metrics_path=handle["metrics_path"],
+                seed=handle["seed"],
+            )
+
+        results = await asyncio.gather(*[_collect_one(h) for h in handles])
+
+        logger.info(
+            "Batch Phase C complete: collected %d results (%d successful)",
+            len(results),
+            sum(1 for r in results if r.success),
+        )
+
+        return list(results)
+
+    async def _async_poll_job(
+        self, job: Any, timeout_sec: int | None, start_time: float
+    ) -> int:
+        """Async version of _poll_job using asyncio.sleep for polling.
+
+        Uses sacct-based polling (via submitit) when sacct is available,
+        otherwise falls back to squeue-based async polling.
+        """
+        if not self._sacct_available:
+            return await self._async_poll_job_squeue(job, timeout_sec, start_time)
+
+        while True:
+            state = job.state
+            if state in ("COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"):
+                break
+
+            if timeout_sec is not None:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= timeout_sec:
+                    raise TimeoutError(f"SLURM job {job.job_id} exceeded {timeout_sec}s")
+
+            await asyncio.sleep(self.poll_interval_sec)
+
+        if state == "COMPLETED":
+            try:
+                return job.result()
+            except Exception:
+                return 0
+        elif state == "TIMEOUT":
+            raise TimeoutError(f"SLURM job {job.job_id} hit SLURM time limit")
+        elif state == "OUT_OF_MEMORY":
+            return 137
+        elif state == "CANCELLED":
+            return -15
+        else:
+            # FAILED
+            try:
+                job.result()  # raises the exception
+            except Exception:
+                pass
+            return 1
+
+    async def _async_poll_job_squeue(
+        self, job: Any, timeout_sec: int | None, start_time: float
+    ) -> int:
+        """Async poll job status via squeue when sacct is unavailable."""
+        job_id = str(job.job_id)
+        while True:
+            try:
+                result = subprocess.run(
+                    ["squeue", "-j", job_id, "-h", "-o", "%T"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                state = result.stdout.strip()
+                if not state:
+                    # Job no longer in queue -- completed or vanished
+                    try:
+                        return job.result()
+                    except Exception:
+                        return 0
+                if state in ("FAILED",):
+                    try:
+                        job.result()
+                    except Exception:
+                        pass
+                    return 1
+                if state == "CANCELLED":
+                    return -15
+                if state == "TIMEOUT":
+                    raise TimeoutError(f"SLURM job {job_id} hit SLURM time limit")
+                if state == "OUT_OF_MEMORY":
+                    return 137
+            except TimeoutError:
+                raise
+            except Exception:
+                pass
+
+            if timeout_sec is not None and (time.monotonic() - start_time) >= timeout_sec:
+                raise TimeoutError(f"SLURM job {job_id} exceeded {timeout_sec}s")
+
+            await asyncio.sleep(self.poll_interval_sec)
+
+    # ------------------------------------------------------------------
+    # Existing helper methods (unchanged)
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _build_compute_params(compute_config: ComputeConfig) -> dict:

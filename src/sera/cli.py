@@ -126,5 +126,18 @@ def validate_specs(work_dir: str = "./sera_workspace"):
     run_validate_specs(work_dir)
 
 
+@app.command()
+def setup(
+    work_dir: str = "./sera_workspace",
+    resume: bool = False,
+    from_input1: str | None = None,
+    skip_phase0: bool = False,
+    lang: str = "ja",
+):
+    """対話型セットアップウィザード"""
+    from sera.commands.setup_cmd import run_setup
+    run_setup(work_dir, resume, from_input1, skip_phase0, lang)
+
+
 if __name__ == "__main__":
     app()

@@ -114,6 +114,37 @@ class PaperComposer:
             f.write(paper.content)
         paper.metadata["paper_path"] = str(paper_path)
 
+        # Save bibliography as paper.bib (BibTeX format)
+        if bib_entries:
+            bib_path = self.output_dir / "paper.bib"
+            with open(bib_path, "w") as f:
+                for entry in bib_entries:
+                    key = entry.get("citation_key", "unknown")
+                    title = entry.get("title", "")
+                    authors = entry.get("authors", [])
+                    year = entry.get("year", "")
+                    venue = entry.get("venue", "")
+                    doi = entry.get("doi", "")
+                    author_str = " and ".join(authors) if isinstance(authors, list) else str(authors)
+                    f.write(f"@article{{{key},\n")
+                    f.write(f"  title = {{{title}}},\n")
+                    f.write(f"  author = {{{author_str}}},\n")
+                    if year:
+                        f.write(f"  year = {{{year}}},\n")
+                    if venue:
+                        f.write(f"  journal = {{{venue}}},\n")
+                    if doi:
+                        f.write(f"  doi = {{{doi}}},\n")
+                    f.write("}\n\n")
+            paper.metadata["bib_path"] = str(bib_path)
+
+        # Save figure descriptions as JSON
+        if figure_descriptions:
+            desc_path = self.output_dir / "figure_descriptions.json"
+            with open(desc_path, "w") as f:
+                json.dump(figure_descriptions, f, indent=2)
+            paper.metadata["figure_descriptions_path"] = str(desc_path)
+
         return paper
 
     # ------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # SERA 要件定義書 — 実装手順書
 
-> 本ファイルは TASK.md v12.4 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -1261,6 +1261,8 @@ def build_context(self, parent: SearchNode, siblings: list[SearchNode]) -> str:
 
 ### 22.17 Step 15: Phase C — HiPER + Tool-Calling
 
+> **実装状況**: ✅ HiPER 3層Advantage分解、Agent Function System（§28）、Tool Execution Engine（§29）は全て実装済み。以下のコード例は初期設計時のもの。実際の実装は `src/sera/agent/` 以下（`agent_functions.py`, `agent_loop.py`, `tool_executor.py`, `tool_policy.py`, `tools/`, `functions/`）を参照。ツール・関数の有効化リストは PlanSpec §5.8 `agent_commands` で Phase 1 に凍結される。
+
 **作業内容**: AgentLLMのtool-calling対応と階層的PPOを実装する。
 
 **実装ファイル**:
@@ -1536,9 +1538,12 @@ def pytest_configure(config):
 [ ] 失敗なしの場合に既存動作に影響しない
 
 === Phase C: HiPER + Tool-Calling（Step 15） ===
-[ ] ToolRegistry がツールの登録・Phase別取得・実行を管理する
-[ ] AgentLLM.generate_with_tools() が全3プロバイダ（local/openai/anthropic）で動作する
-[ ] HierarchicalPPOTrainer の基本フレームワークが実装済み
+[x] ToolExecutor が18ツールのディスパッチ・ToolPolicy・レート制限を管理する（§29）
+[x] AgentFunctionRegistry が19関数を登録し call_function() で統一呼び出し（§28）
+[x] AgentLoop が ReAct 型反復ループで allowed_tools を制限しツール実行（§29）
+[x] AgentLLM.generate_with_tools() が全3プロバイダ（local/openai/anthropic）で動作する
+[x] HierarchicalPPOTrainer の基本フレームワークが実装済み
+[x] PlanSpec §5.8 agent_commands でツール・関数の有効化リストが Phase 1 で凍結される
 [ ] E2Eテスト: ツール呼び出し→実行→結果取得のフルパスが動作する
 
 === 共通 ===

@@ -85,13 +85,14 @@ def run_generate_paper(work_dir: str) -> None:
 
     composer = PaperComposer(
         output_dir=paper_dir,
-        figures_dir=figures_dir,
-        citation_searcher=citation_searcher,
     )
 
     console.print("[cyan]Generating paper (Phase 7)...[/cyan]")
     paper = asyncio.run(
-        composer.compose(evidence, specs.paper, specs.teacher_paper_set, agent_llm, vlm)
+        composer.compose(
+            evidence, specs.paper, specs.teacher_paper_set, agent_llm, vlm,
+            semantic_scholar_client=ss_client,
+        )
     )
 
     # Save paper
@@ -168,13 +169,12 @@ def run_evaluate_paper(work_dir: str) -> None:
         # Apply improvements
         if result.improvement_instructions:
             console.print(f"  Applying {len(result.improvement_instructions)} improvements...")
-            for instruction in sorted(result.improvement_instructions, key=lambda x: x.get("priority", 99)):
-                if not instruction.get("requires_experiment", False):
-                    # Apply text revision via LLM
-                    revision_prompt = f"Revise the following paper based on this instruction:\n{instruction['action']}\n\nPaper:\n{paper_md}"
-                    paper_md = asyncio.run(agent_llm.generate(
-                        revision_prompt, purpose="paper_revision",
-                    ))
+            for instruction in result.improvement_instructions:
+                # Apply text revision via LLM
+                revision_prompt = f"Revise the following paper based on this instruction:\n{instruction}\n\nPaper:\n{paper_md}"
+                paper_md = asyncio.run(agent_llm.generate(
+                    revision_prompt, purpose="paper_revision",
+                ))
 
         # Save revised version
         with open(paper_md_path, "w") as f:

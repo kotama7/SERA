@@ -1,6 +1,6 @@
 # TASK.md
 # Self-Evolving Research Agent（SERA）
-# 完全最終要件定義書 v12.3
+# 完全最終要件定義書 v13.0
 
 > **本ファイルは分割されました。** 各セクションの詳細は [`task/`](./task/) ディレクトリ以下を参照してください。
 
@@ -35,3 +35,6 @@
 | [task/18_slurm.md](./task/18_slurm.md) | §24: SLURM実行パイプライン |
 | [task/19_agent_model.md](./task/19_agent_model.md) | §25: Agentモデル拡張 |
 | [task/20_tool_using_agent.md](./task/20_tool_using_agent.md) | §26: Tool-Using Agent拡張（HiPER + ECHO） |
+| [task/21_setup_wizard.md](./task/21_setup_wizard.md) | §27: 対話型セットアップウィザード |
+| [task/22_agent_functions.md](./task/22_agent_functions.md) | §28: Agent Function System（タスク定義 + 統一エントリポイント） |
+| [task/23_tool_execution.md](./task/23_tool_execution.md) | §29: Tool Execution Engine（ツール実行基盤 + AgentLoop） |

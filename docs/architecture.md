@@ -130,10 +130,14 @@ lineage/
 
 ### 1.3 ツリー同期ルール
 
-- `SearchNode.adapter_node_id` がLoRA系譜ツリーを参照する
-- PPO更新なし → 親の `adapter_node_id` を継承 (1:多の関係が通常)
-- PPO更新あり → 新しい `adapter_node_id` を割り当て
+`sync_adapter_assignment()` 関数（`search_manager.py`）が以下のルールで `adapter_node_id` を設定する:
+
+- **ルートノード**: `adapter_node_id = "adapter_root"`
+- **PPO更新あり**: 新しい `adapter_node_id` を割り当て（`PPOTrainer.update()` が返す `new_adapter_node_id`）
+- **PPO更新なし**: 親の `adapter_node_id` を継承 (1:多の関係が通常)
 - 探索ノード数 >= 系譜ノード数 (常に成立)
+
+PPO更新後、`PPOTrainer` は `lineage_manager.save_delta()` でアダプタデルタをディスクに永続化し、`new_adapter_node_id` を結果辞書で返す。`SearchManager` は PPO バッファ内の全ノードに対して `sync_adapter_assignment()` を呼び出して `adapter_node_id` を更新する。
 
 ### 1.4 プルーニング (sera.lineage.pruner.Pruner)
 
@@ -162,8 +166,13 @@ sera.commands/                    → CLIコマンドハンドラ
   status_cmd                      → sera status / sera show-node
   replay_cmd                      → sera replay
   validate_cmd                    → sera validate-specs
+  setup_cmd                       → sera setup (対話型セットアップウィザード)
 sera.agent/
   agent_llm                       → 統合LLMインターフェース (local/OpenAI/Anthropic)
+                                    PROMPT_FORMATTERS レジストリ (モデルファミリ別プロンプト整形)
+                                    ToolCall / GenerationOutput データクラス
+                                    generate_with_tools() (ネイティブtool calling対応)
+                                    get_turn_log_probs() (MT-GRPO用Phase別ログ確率)
   prompt_templates                → 21個のプロンプトテンプレート (TEMPLATE_REGISTRY)
   vllm_engine                     → vLLMオフラインモード推論エンジン (LoRA hot-swap + sleep/wake)
 sera.specs/
@@ -172,7 +181,7 @@ sera.specs/
   problem_spec                    → ProblemSpecModel (最適化問題定義)
   model_spec                      → ModelSpecModel (ベースモデル、アダプタ、VLM設定)
   resource_spec                   → ResourceSpecModel (計算資源設定)
-  plan_spec                       → PlanSpecModel (探索戦略、報酬、ロギング)
+  plan_spec                       → PlanSpecModel (探索戦略、報酬、ロギング、agent_commands)
   execution_spec                  → ExecutionSpecModel (7つのサブ設定を集約)
   paper_spec                      → PaperSpecModel (論文フォーマット設定)
   paper_score_spec                → PaperScoreSpecModel (評価基準)
@@ -187,10 +196,10 @@ sera.phase0/
     arxiv                         → arXiv API クライアント
     web_search                    → SerpAPI ウェブ検索クライアント
   ranking                         → citation_norm, compute_ranking_score, rank_papers
-  clustering                      → cluster_papers (LLMベースのクラスタリング)
+  clustering                      → cluster_papers (LLMベースのクラスタリング、キーワード抽出)
 sera.phase1/
-  spec_builder                    → LLM駆動のspec生成
-  spec_freezer                    → SHA-256によるExecutionSpecロック + 検証
+  spec_builder                    → LLM駆動のspec生成 + ModelSpec/ResourceSpec/ExecutionSpec構築
+  spec_freezer                    → SHA-256によるExecutionSpecロック + 検証 + agent_commandsバリデーション
 sera.search/
   search_manager                  → メイン探索ループ (SearchManager.run())
   search_node                     → SearchNode データクラス
@@ -202,7 +211,7 @@ sera.execution/
   executor                        → Executor ABC + RunResult データクラス
   local_executor                  → LocalExecutor (subprocess ベース)
   slurm_executor                  → SlurmExecutor (submitit ベース)
-  docker_executor                 → DockerExecutor (未実装スタブ: NotImplementedError)
+  docker_executor                 → DockerExecutor (Docker SDK、GPU対応、OOM検出)
   experiment_generator            → ExperimentGenerator (LLMコード生成)
 sera.evaluation/
   evaluator                       → Evaluator ABC (evaluate_initial / evaluate_full)
@@ -353,7 +362,7 @@ Input-1 YAML (ユーザー入力)
        │    4. VLM図面記述 (VLMReviewer、有効時のみ)
        │    5. 論文本文生成 + ライティングリフレクションループ (n_writeup_reflections回)
        │    6. 最終統合 (図番号付け、引用キー整合性、参考文献セクション追加)
-       │    → paper/paper.md + figures/*.png
+       │    → paper/paper.md + paper/paper.bib + paper/figure_descriptions.json + figures/*.png
        │
        ├─ Phase 8: PaperEvaluator.evaluate()
        │    アンサンブルLLMレビュー (num_reviews_ensemble人のレビュアー)
@@ -476,11 +485,22 @@ class Executor(ABC):
 |-------|------------|------|
 | `LocalExecutor` | `subprocess.Popen` | 実装済み |
 | `SlurmExecutor` | `submitit.AutoExecutor` | 実装済み |
-| `DockerExecutor` | Docker SDK | 未実装 (`NotImplementedError`) |
+| `DockerExecutor` | `docker` Python SDK | 実装済み |
 
-`LocalExecutor` と `SlurmExecutor` は多言語対応: `interpreter_command` と `seed_arg_format` が設定可能 (Python, R, Julia等)。
+`LocalExecutor`、`SlurmExecutor`、`DockerExecutor` は多言語対応: `interpreter_command` と `seed_arg_format` が設定可能 (Python, R, Julia等)。
+
+`DockerExecutor` は `docker.from_env()` でクライアントを生成し、コンテナ内で実験を実行する。GPU パススルー（nvidia runtime / `DeviceRequest`）、タイムアウト処理（`container.wait(timeout=...)`）、OOM 検出（Docker `OOMKilled` フラグ + exit code 137 + stderr パターン）に対応。`pip install docker` でインストールが必要（未インストール時はインポートエラー）。
 
 `SlurmExecutor` は `compute_config: ComputeConfig | None` を受け取り、`_build_compute_params()` で submitit パラメータに自動マッピングする（`slurm_gpus_per_node`, `slurm_mem`, `slurm_cpus_per_task`, `constraint`）。`sbatch_extra` のユーザー指定値が常に優先される。`compute_config=None` の場合は従来動作と完全互換。
+
+**非同期バッチ実行**: `SlurmExecutor` は非同期バッチパイプラインもサポートする:
+
+- `submit_async(node_id, script_path, seed, timeout_sec)` -- ジョブを投入し、即座にハンドル辞書を返す（ブロックしない）
+- `collect_result(handle)` -- ハンドルから `RunResult` を収集する
+- `run_batch(tasks)` -- 3 フェーズパイプライン: Phase A（全ジョブ一括投入） → Phase B（全ジョブ非同期ポーリング） → Phase C（結果収集）
+- `_async_poll_job()` / `_async_poll_job_squeue()` -- `asyncio.sleep` ベースの非同期ジョブポーリング
+
+既存の同期 `run()` メソッドはそのまま維持されている。
 
 ### 4.6 Evaluator ABC (sera.evaluation.evaluator)
 
@@ -506,12 +526,36 @@ class Evaluator(ABC):
 | プロバイダ | バックエンド | 特記事項 |
 |-----------|------------|---------|
 | `local` | transformers + peft (or vLLM) | LoRA動的切り替え、`trl.trainer.utils.selective_log_softmax` でログ確率計算、`AutoModelForCausalLMWithValueHead` で価値推定 |
-| `openai` | `openai.AsyncOpenAI` | 環境変数からAPIキー取得 |
-| `anthropic` | `anthropic.AsyncAnthropic` | 環境変数からAPIキー取得 |
+| `openai` | `openai.AsyncOpenAI` | 環境変数からAPIキー取得、ネイティブtool calling対応 |
+| `anthropic` | `anthropic.AsyncAnthropic` | 環境変数からAPIキー取得、ネイティブtool calling対応 |
 
 推論エンジン選択 (`model_spec.inference.engine`):
 - `"transformers"`: HuggingFace transformersによる直接推論
 - `"vllm"`: `VLLMInferenceEngine` によるオフラインモード推論。LoRA hot-swap対応、`sleep(level=2)` / `wake_up()` でPPO学習時のGPUメモリ解放
+
+**モデルファミリ別プロンプト整形** (§25.3.2):
+
+`PROMPT_FORMATTERS` レジストリがモデルファミリに応じたプロンプト整形を提供する。`_format_prompt()` メソッドがローカルプロバイダで `tokenizer.apply_chat_template` が利用できない場合に使用される。
+
+| フォーマッタ | 対応フォーマット | 対象モデル |
+|-------------|----------------|-----------|
+| `_ChatMLFormatter` | `chatml` | Qwen2系 |
+| `_Llama3Formatter` | `llama3` | Llama 3系、CodeLlama |
+| `_DeepSeekFormatter` | `deepseek` | DeepSeek系 |
+| `_PromptFormatter` | `default` | パススルー（変換なし） |
+
+**構造化出力型**:
+
+- `ToolCall`: `tool_name`, `arguments`, `call_id` を保持するデータクラス
+- `GenerationOutput`: `text`, `tool_calls`, `purpose` を保持するデータクラス
+
+**ツール呼び出し** (`generate_with_tools`):
+
+OpenAI/Anthropic プロバイダではネイティブ tool calling API を使用。ローカルプロバイダではプロンプトベースでツール定義を注入し、JSONレスポンスをパースする。
+
+**Phase別ログ確率** (`get_turn_log_probs`):
+
+MT-GRPO用にPhase別のレスポンスに対するログ確率を計算する。コンテキストを逐次拡張しながら各Phaseの `selective_log_softmax` を計算する。
 
 全てのLLM呼び出しは `agent_llm_log.jsonl` にログ出力 (call_id, purpose, prompt_hash, latency_ms)。
 
@@ -561,6 +605,8 @@ sera_workspace/
     report.json                   # 研究レポート
   paper/
     paper.md                      # 生成された論文 (Markdown)
+    paper.bib                     # 参考文献 (BibTeX形式)
+    figure_descriptions.json      # VLM図面記述 (JSON)
     figures/                      # 生成された図 (*.png)
     experiment_summaries.json     # 実験サマリーデータ
 ```
@@ -573,7 +619,7 @@ sera_workspace/
 |---------|------|------|
 | Phase 0 | `asyncio` + 非同期HTTPクライアント | `httpx.AsyncClient` によるAPI呼び出し。プロバイダごとにフォールバック順序で逐次試行 |
 | Phase 2 | 逐次 | ツリーノード展開は一度に1ノード (一貫したツリー状態を維持) |
-| Phase 3 | 逐次 (ノード内) | `LocalExecutor` / `SlurmExecutor` によるシード単位の逐次実行。`SlurmExecutor` はジョブ投入後にポーリング (`sacct` / `squeue`) |
+| Phase 3 | 逐次 (ノード内) / 非同期バッチ | `LocalExecutor` / `SlurmExecutor` によるシード単位の実行。`SlurmExecutor` はジョブ投入後にポーリング (`sacct` / `squeue`)。非同期バッチモード (`run_batch`) では全ジョブを一括投入し、`asyncio` ベースで並列ポーリング |
 | Phase 5 | 単一プロセスPPO | `accelerate.Accelerator()` による任意のマルチGPU対応 |
 | Phase 7 | 逐次 (ステップ単位) | 6ステップの論文生成パイプライン |
 
@@ -635,7 +681,7 @@ sera research --resume
 
 | 拡張対象 | メカニズム | 現在の実装 |
 |---------|----------|-----------|
-| 実験実行バックエンド | `Executor` ABC を継承 | `LocalExecutor` (subprocess), `SlurmExecutor` (submitit) が実装済み。`DockerExecutor` はスタブ |
+| 実験実行バックエンド | `Executor` ABC を継承 | `LocalExecutor` (subprocess), `SlurmExecutor` (submitit), `DockerExecutor` (Docker SDK) が実装済み |
 | 評価ロジック | `Evaluator` ABC を継承 | `StatisticalEvaluator` が実装済み |
 | 論文検索プロバイダ | `BaseScholarClient` ABC を継承 | `SemanticScholarClient`, `CrossRefClient`, `ArxivClient`, `WebSearchClient` が実装済み |
 | 分岐オペレータ | `TreeOps` に新メソッド追加 | `draft`, `debug`, `improve` が実装済み |

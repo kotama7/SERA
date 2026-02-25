@@ -1,6 +1,6 @@
 # SERA 要件定義書 — 付録
 
-> 本ファイルは TASK.md v12.4 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -68,6 +68,8 @@
 ---
 
 ## 付録C：AgentLLM インターフェース（tool-calling対応）
+
+> **v13.0 更新**: 以下のインターフェース定義は初期設計時のもの。実装では `ToolRegistry` は `ToolExecutor`（§29）に、`load_tools()` は `AgentLoop` 統合に置き換えられている。`call_function()`（§28）が統一エントリポイントとして単発生成と AgentLoop を自動切替する。ツール・関数の有効化は PlanSpec §5.8 `agent_commands` で Phase 1 に凍結される。実際の実装は `src/sera/agent/agent_llm.py` を参照。
 
 ```python
 from pydantic import BaseModel

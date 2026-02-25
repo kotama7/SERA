@@ -134,6 +134,7 @@ PPO 更新サイクルを 1 回実行する非同期メソッド。
      - **総合ロス**: `policy_loss + value_loss_coef * value_loss - entropy_coef * entropy`
      - 勾配クリッピング: `accelerator.clip_grad_norm_(lora_params, max_grad_norm)`
 8. **デルタノルムの計算**: `delta_norm_L2 = sqrt(sum((post[k] - pre[k]).norm()^2 for k in pre))`
+8b. **アダプタデルタの永続化**: `lineage_manager` が存在し `delta_norm > 0` の場合、`lineage_manager.save_delta()` で新しいアダプタノードとしてデルタを保存する。`new_adapter_node_id`（UUID4）が生成され、結果辞書に含まれて返される。これにより `SearchManager` がデュアルツリー同期を行える。
 9. **適応 KL 係数の調整**:
    - `mean_kl > kl_target * 1.5` の場合: `kl_coef *= 2.0`
    - `mean_kl < kl_target / 1.5` の場合: `kl_coef /= 2.0`

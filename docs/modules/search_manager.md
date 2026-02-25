@@ -124,6 +124,24 @@ LCB が最高のノードを `best_node` として更新。
 
 `signal.SIGINT` を捕捉し、チェックポイントを保存して `sys.exit(20)` で終了する。
 
+### sync_adapter_assignment (モジュールレベル関数)
+
+デュアルツリー同期を行う関数。`_add_node()` とPPO更新後に呼び出される。
+
+```python
+def sync_adapter_assignment(
+    search_node: SearchNode,
+    ppo_updated: bool,
+    new_adapter_node_id: str | None,
+    all_nodes: dict[str, SearchNode],
+) -> None
+```
+
+**ルール:**
+1. ルートノード (`parent_id is None`) → `adapter_node_id = "adapter_root"`
+2. PPO更新あり (`ppo_updated=True`, `new_adapter_node_id` 非 None) → 新しい ID を割り当て
+3. それ以外 → 親の `adapter_node_id` を継承
+
 ### save_state() / load_state(state)
 
 チェックポイントのシリアライズ/デシリアライズ。保存される情報: `step`, `all_nodes`（各ノードの `to_dict()`）, `closed_set`, `best_node_id`, `open_list`, `ppo_buffer`。

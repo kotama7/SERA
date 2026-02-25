@@ -26,11 +26,13 @@ class VLLMInferenceEngine:
     """
 
     def __init__(self, model_spec: Any) -> None:
+        from transformers import AutoTokenizer
         from vllm import LLM
 
         self._model_spec = model_spec
         inf = model_spec.inference
 
+        tp_size = getattr(inf, "tensor_parallel_size", 1)
         self._llm = LLM(
             model=model_spec.base_model.id,
             revision=model_spec.base_model.revision or None,
@@ -41,6 +43,11 @@ class VLLMInferenceEngine:
             max_model_len=model_spec.base_model.max_seq_len,
             swap_space=inf.swap_space_gb,
             enforce_eager=inf.enforce_eager,
+            tensor_parallel_size=tp_size,
+        )
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            model_spec.base_model.id,
+            revision=model_spec.base_model.revision or None,
         )
         self._adapter_cache_dir = Path(inf.adapter_cache_dir)
         self._adapter_id_map: dict[str, int] = {}  # node_id → vLLM int_id
@@ -86,8 +93,17 @@ class VLLMInferenceEngine:
         if adapter_node_id and lineage_manager:
             lora_request = self._get_lora_request(adapter_node_id, lineage_manager)
 
+        # Apply chat template for instruct models
+        if hasattr(self._tokenizer, "apply_chat_template"):
+            messages = [{"role": "user", "content": prompt}]
+            formatted_prompt = self._tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        else:
+            formatted_prompt = prompt
+
         outputs = self._llm.generate(
-            [prompt],
+            [formatted_prompt],
             sampling_params,
             lora_request=lora_request,
         )

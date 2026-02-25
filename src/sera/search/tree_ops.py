@@ -265,8 +265,33 @@ class TreeOps:
         return all_nodes
 
     async def _generate_proposals(self, prompt: str, n: int) -> list[dict]:
-        """Generate proposals via LLM with retry logic."""
+        """Generate proposals via LLM with retry logic.
+
+        Uses ``AgentLLM.call_function("search_draft")`` when available,
+        falling back to direct ``generate()`` + ``_parse_json_response()``.
+        """
         temperature = getattr(self.specs, "_draft_temperature", 0.7)
+
+        # Prefer call_function path
+        if hasattr(self.agent_llm, "call_function"):
+            result = await self.agent_llm.call_function(
+                "search_draft", prompt=prompt, purpose="draft", temperature=temperature
+            )
+            if isinstance(result, list) and result:
+                return result
+            if isinstance(result, dict):
+                return [result]
+            # Fallback on call_function returning None/empty
+            logger.warning("call_function(search_draft) returned empty, using fallback")
+            return [
+                {
+                    "hypothesis": "Baseline approach with default configuration",
+                    "experiment_config": {},
+                    "rationale": "Fallback: LLM failed to produce valid JSON",
+                }
+            ]
+
+        # Legacy path (deprecated — use call_function instead)
         proposals = None
         for attempt in range(3):
             try:
@@ -319,8 +344,15 @@ class TreeOps:
         )
 
         temperature = getattr(self.specs, "_debug_temperature", 0.5)
-        response = await self.agent_llm.generate(prompt, purpose="debug", temperature=temperature)
-        parsed = self._parse_json_response(response)
+
+        # Prefer call_function path
+        if hasattr(self.agent_llm, "call_function"):
+            parsed = await self.agent_llm.call_function(
+                "search_debug", prompt=prompt, purpose="debug", temperature=temperature
+            )
+        else:
+            response = await self.agent_llm.generate(prompt, purpose="debug", temperature=temperature)
+            parsed = self._parse_json_response(response)
 
         if parsed and isinstance(parsed, dict):
             new_node = SearchNode(
@@ -385,21 +417,34 @@ class TreeOps:
         )
 
         temperature = getattr(self.specs, "_improve_temperature", 0.7)
-        proposals = None
-        for attempt in range(3):
-            try:
-                response = await self.agent_llm.generate(
-                    prompt, purpose="improve", temperature=temperature + attempt * 0.1
-                )
-                parsed = self._parse_json_response(response)
-                if parsed is not None:
-                    if isinstance(parsed, list):
-                        proposals = parsed
-                    elif isinstance(parsed, dict):
-                        proposals = [parsed]
-                    break
-            except Exception as e:
-                logger.warning("Improve attempt %d failed: %s", attempt + 1, e)
+
+        # Prefer call_function path
+        if hasattr(self.agent_llm, "call_function"):
+            result = await self.agent_llm.call_function(
+                "search_improve", prompt=prompt, purpose="improve", temperature=temperature
+            )
+            proposals = None
+            if isinstance(result, list) and result:
+                proposals = result
+            elif isinstance(result, dict):
+                proposals = [result]
+        else:
+            # Legacy path (deprecated)
+            proposals = None
+            for attempt in range(3):
+                try:
+                    response = await self.agent_llm.generate(
+                        prompt, purpose="improve", temperature=temperature + attempt * 0.1
+                    )
+                    parsed = self._parse_json_response(response)
+                    if parsed is not None:
+                        if isinstance(parsed, list):
+                            proposals = parsed
+                        elif isinstance(parsed, dict):
+                            proposals = [parsed]
+                        break
+                except Exception as e:
+                    logger.warning("Improve attempt %d failed: %s", attempt + 1, e)
 
         if not proposals:
             logger.warning("All improve attempts failed, returning empty list")

@@ -21,7 +21,7 @@ Phase 0 の関連研究収集を担当するモジュール群のドキュメン
 - `tenacity` -- リトライ機構（Semantic Scholar）
 - `structlog` -- 構造化ログ
 - `sera.utils.logging` (`JsonlLogger`)
-- `sera.specs.phase0` -- 出力スペックモデル（`RelatedWorkSpec`, `PaperSpec`, `PaperScoreSpec`, `ClusterSpec`, `TeacherPaperSet`）
+- `sera.specs.phase0` -- 出力スペックモデル（`RelatedWorkSpec`, `PaperSpec`, `PaperScoreSpec`, `ClusterSpec`, `TeacherPaperSet`, `BaselineCandidate`, `OpenProblem`）
 - `sera.specs.input1` (`Input1Model`)
 
 ---
@@ -86,6 +86,7 @@ Phase 0 パイプライン全体を実行する非同期メソッド。
 
 3. **重複排除** (`_deduplicate`):
    - `paper_id` で重複を除去、最初の出現を保持
+   - **クエリログ**: 各 API 呼び出しの結果を `queries.jsonl` に記録（後述）
 
 4. **引用グラフの展開** (`_expand_citations`):
    - `citation_graph_depth > 0` の場合に実行
@@ -102,8 +103,69 @@ Phase 0 パイプライン全体を実行する非同期メソッド。
 7. **出力スペック構築**:
    - 各論文を `PaperSpec` と `PaperScoreSpec` に変換
    - `ClusterSpec` リストを生成
-   - `RelatedWorkSpec`（papers, clusters, scores）を構築
+   - `RelatedWorkSpec`（papers, clusters, scores, baseline_candidates, common_metrics, open_problems）を構築
    - `TeacherPaperSet` として上位 `teacher_papers` 件を設定
+
+### RelatedWorkSpec の追加フィールド
+
+`run()` メソッドは `RelatedWorkSpec` に以下の追加フィールドを含める:
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `baseline_candidates` | `list[BaselineCandidate]` | 被引用数上位 5 件の論文を構造化データとして保持 |
+| `common_metrics` | `list[str]` | `input1.goal.metric` から抽出された主要メトリクス名のリスト |
+| `open_problems` | `list[OpenProblem]` | クラスタの `description` から抽出された未解決問題を構造化データとして保持 |
+
+**BaselineCandidate** (dataclass):
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `name` | `str` | 論文タイトル |
+| `paper_id` | `str` | 論文 ID |
+| `reported_metric` | `str` | 報告されたメトリクス名（`input1.goal.metric` から取得） |
+| `method_summary` | `str` | アブストラクトの先頭 200 文字 |
+
+**OpenProblem** (dataclass):
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `description` | `str` | クラスタの説明文 |
+| `related_paper_ids` | `list[str]` | 関連する論文 ID のリスト |
+| `severity` | `str` | 深刻度（デフォルト `"medium"`） |
+
+これらは Phase 2 のルートドラフト生成時にプロンプトへ注入され、`baseline`/`open_problem`/`novel` カテゴリ分割に活用される。
+
+### クエリログ（queries.jsonl）
+
+`_search_with_fallback()` は各 API 呼び出しの結果をログに記録する:
+
+```json
+{
+  "event": "api_query",
+  "query_id": "<UUID>",
+  "api": "SemanticScholarClient",
+  "endpoint": "SemanticScholarClient",
+  "params": {"query": "...", "limit": 20, "year_from": 2021},
+  "timestamp_utc": "2026-01-15T12:34:56+00:00",
+  "http_status": 200,
+  "result_count": 15,
+  "paper_ids_returned": ["id1", "id2", "..."],
+  "retry_count": 0,
+  "error": null
+}
+```
+
+パイプライン完了時には `phase0_complete` イベントも記録される:
+
+```json
+{
+  "event": "phase0_complete",
+  "total_searched": 120,
+  "top_k": 10,
+  "num_clusters": 5,
+  "teacher_papers": 5
+}
+```
 
 ---
 
@@ -222,12 +284,13 @@ score = citation_weight * citation_norm + (1 - citation_weight) * relevance_scor
 | `label` | `str` | クラスタ名 |
 | `description` | `str` | クラスタの説明 |
 | `paper_ids` | `list[str]` | クラスタに属する論文 ID |
+| `keywords` | `list[str]` | クラスタのキーワード（LLM が JSON レスポンスで返す） |
 
 ### cluster_papers(papers, agent_llm=None) -> list[Cluster]
 
 非同期関数。LLM ベースで論文をテーマ別クラスタに分類する。
 
-- LLM が利用可能な場合: 論文リスト（ID, タイトル, 年, 引用数）を提示し、JSON 形式でクラスタリングを依頼
-- LLM レスポンスのパース: Markdown コードフェンスを除去後に JSON パース。存在する `paper_id` のみを含むクラスタを構築
+- LLM が利用可能な場合: 論文リスト（ID, タイトル, 年, 引用数）を提示し、JSON 形式（`label`, `description`, `keywords`, `paper_ids`）でクラスタリングを依頼
+- LLM レスポンスのパース: Markdown コードフェンスを除去後に JSON パース。`keywords` フィールドも抽出。存在する `paper_id` のみを含むクラスタを構築
 - LLM が利用不可、またはパース失敗時: 全論文を含む単一の `"All Papers"` クラスタにフォールバック
 - 論文リストが空の場合は空リストを返す

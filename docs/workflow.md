@@ -132,9 +132,15 @@ combined_score = citation_weight * citation_norm + (1 - citation_weight) * relev
 
 | ファイル | 内容 |
 |---------|------|
-| `specs/related_work_spec.yaml` | 論文メタデータ・クラスタ・スコア |
+| `specs/related_work_spec.yaml` | 論文メタデータ・クラスタ・スコア + `baseline_candidates`, `common_metrics`, `open_problems` |
 | `specs/paper_score_spec.yaml` | 各論文の引用正規化値・関連度・総合スコア |
 | `specs/teacher_paper_set.yaml` | 上位論文（デフォルト 5 件）のスタイル参照用セット |
+
+`related_work_spec.yaml` の追加フィールド:
+
+- **`baseline_candidates`**: 被引用数上位 5 件の論文を `BaselineCandidate` 構造体（`name`, `paper_id`, `reported_metric`, `method_summary`）として保持。Phase 2 のルートドラフトで `baseline` カテゴリのプロンプトに注入
+- **`common_metrics`**: `input1.goal.metric` 等から抽出されたメトリクス名リスト
+- **`open_problems`**: クラスタの `description` から `OpenProblem` 構造体（`description`, `related_paper_ids`, `severity`）として抽出。Phase 2 のルートドラフトで `open_problem` カテゴリのプロンプトに注入
 
 ### 設定パラメータ
 
@@ -152,20 +158,33 @@ combined_score = citation_weight * citation_norm + (1 - citation_weight) * relev
 
 **CLI**: `sera freeze-specs`
 
-**エントリポイント**: `SpecBuilder` (LLM で ProblemSpec/PlanSpec を生成) -> `SpecFreezer.freeze()` (全 Spec を保存・ロック)
+**エントリポイント**: `SpecBuilder` (LLM で ProblemSpec/PlanSpec を生成、CLI 引数から ModelSpec/ResourceSpec/ExecutionSpec を構築) -> `SpecFreezer.freeze()` (全 Spec を保存・ロック)
 
 ### 処理フロー
 
 ```mermaid
 flowchart TD
     A[Input-1 + Phase 0 出力] --> B["SpecBuilder: LLM で<br/>ProblemSpec, PlanSpec 生成<br/>（最大 3 回リトライ）"]
-    B --> C[CLI オプションから<br/>ExecutionSpec 構築]
-    C --> D[ModelSpec, ResourceSpec<br/>デフォルト生成]
-    D --> E["SpecFreezer.freeze()"]
-    E --> F["specs/ に 10 YAML 保存"]
-    E --> G["SHA-256 ハッシュ計算"]
+    B --> C["SpecBuilder.build_execution_spec()<br/>CLI オプションから ExecutionSpec 構築"]
+    C --> D["SpecBuilder.build_model_spec()<br/>モデルファミリ自動推定 + デフォルト target_modules"]
+    D --> D2["SpecBuilder.build_resource_spec()<br/>CLI オプションから ResourceSpec 構築"]
+    D2 --> E["SpecFreezer.freeze()"]
+    E --> E2["agent_commands バリデーション<br/>（§5.8.4: ツール存在・Phase整合性チェック）"]
+    E2 --> F["specs/ に 10 YAML 保存"]
+    E2 --> G["SHA-256 ハッシュ計算"]
     G --> H["execution_spec.yaml.lock 書き出し"]
 ```
+
+### モデルファミリ自動推定
+
+`SpecBuilder.build_model_spec()` は `infer_model_family(base_model_id)` でモデルファミリを自動推定し、ファミリに応じたデフォルト `target_modules` を設定する:
+
+| モデルファミリ | パターン | デフォルト target_modules |
+|--------------|---------|------------------------|
+| `qwen2` | `"qwen"` を含む | `q_proj`, `k_proj`, `v_proj` |
+| `llama3` | `"llama-3"` / `"llama3"` を含む | `q_proj`, `k_proj`, `v_proj`, `o_proj` |
+| `deepseek` | `"deepseek"` を含む | `q_proj`, `v_proj` |
+| `codellama` | `"codellama"` / `"code-llama"` を含む | `q_proj`, `v_proj` |
 
 ### 凍結される Spec ファイル一覧
 
@@ -182,6 +201,15 @@ flowchart TD
 | `plan_spec.yaml` | `PlanSpecModel` | 探索計画（LLM 生成） |
 | `execution_spec.yaml` | `ExecutionSpecModel` | 実行ハイパーパラメータ（凍結レイヤ） |
 | `execution_spec.yaml.lock` | -- | SHA-256 ハッシュ（改竄検知用） |
+
+### agent_commands バリデーション（§5.8.4）
+
+`SpecFreezer.freeze()` は ExecutionSpec ロックの前に `_validate_agent_commands(plan_spec)` を呼び出し、以下を検証する:
+
+1. **ツール存在チェック**: `function_tool_bindings` の各ツールが `available_tools` のいずれかのカテゴリに存在するか
+2. **Phase ツール整合性チェック**: 関数にバインドされたツールが、その関数が属する Phase の `phase_tool_map` のサブセットであるか
+
+いずれも警告ログの出力のみでプロセスは継続する。
 
 ### 改竄検知
 
@@ -298,6 +326,8 @@ priority = lcb - lambda_cost * total_cost + beta_exploration * (1 / sqrt(eval_ru
 ## Phase 3: 実験実行
 
 **エントリポイント**: `ExperimentGenerator.generate()` -> `LocalExecutor.run()` (または `SlurmExecutor` / `DockerExecutor`)
+
+> **SLURM 非同期バッチ**: `SlurmExecutor` は `run_batch(tasks)` メソッドで複数ジョブの一括投入・並列ポーリング・一括結果収集をサポートする（3 フェーズパイプライン: submit all → poll all → collect all）。
 
 ### 処理フロー
 
@@ -674,8 +704,10 @@ flowchart TD
 | ファイル | 内容 |
 |---------|------|
 | `paper/paper.md` | 論文本文（Markdown 形式） |
-| `paper/figures/*.png` | 生成された図表 |
 | `paper/paper.bib` | 参考文献（BibTeX 形式） |
+| `paper/figure_descriptions.json` | VLM による各図の説明 |
+| `paper/experiment_summaries.json` | 実験サマリーと最良ノード情報 |
+| `paper/figures/*.png` | 生成された図表 |
 
 ---
 

@@ -1,6 +1,6 @@
 # SERA 要件定義書 — Phase 6: 系譜管理・剪定
 
-> 本ファイルは TASK.md v12.4 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 

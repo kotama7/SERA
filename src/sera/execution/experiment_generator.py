@@ -169,6 +169,16 @@ class ExperimentGenerator:
             template_section=template_section,
         )
 
+        # Prefer call_function path
+        if hasattr(self.agent_llm, "call_function"):
+            code = await self.agent_llm.call_function(
+                "experiment_code_gen", prompt=prompt, purpose="experiment_code_gen", temperature=0.5
+            )
+            if not code:
+                code = "# Error: code generation returned empty result"
+            return code
+
+        # Legacy path (deprecated — use call_function instead)
         response = await self.agent_llm.generate(prompt, purpose="experiment_code_gen", temperature=0.5)
         code = self._extract_code(response, lang_config.code_block_tag)
         return code

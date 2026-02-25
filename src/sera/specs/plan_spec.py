@@ -118,6 +118,202 @@ class ArtifactsConfig(BaseModel):
     export_format: str = Field("json", description="Export format for the final results")
 
 
+class LoopDefaults(BaseModel):
+    """AgentLoop default parameters (§5.8.5)."""
+
+    max_steps: int = Field(10, description="Max ReAct loop steps")
+    tool_call_budget: int = Field(20, description="Tool call budget per loop")
+    observation_max_tokens: int = Field(2000, description="Max tokens per tool observation")
+    timeout_sec: float = Field(300.0, description="Loop timeout in seconds")
+
+
+class FunctionLoopOverride(BaseModel):
+    """Per-function override for AgentLoop parameters (§5.8.5)."""
+
+    max_steps: int | None = Field(None, description="Override max_steps")
+    tool_call_budget: int | None = Field(None, description="Override tool_call_budget")
+    observation_max_tokens: int | None = Field(None, description="Override observation_max_tokens")
+    timeout_sec: float | None = Field(None, description="Override timeout_sec")
+
+
+class ToolsConfig(BaseModel):
+    """Tool availability and phase-based restrictions (§5.8.2)."""
+
+    enabled: bool = Field(False, description="Enable tool execution via AgentLoop")
+    api_rate_limit_per_minute: int = Field(30, description="External API rate limit")
+
+    available_tools: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "search": [
+                "semantic_scholar_search",
+                "semantic_scholar_references",
+                "semantic_scholar_citations",
+                "crossref_search",
+                "arxiv_search",
+                "web_search",
+            ],
+            "execution": [
+                "execute_experiment",
+                "execute_code_snippet",
+                "run_shell_command",
+            ],
+            "file": [
+                "read_file",
+                "write_file",
+                "read_metrics",
+                "read_experiment_log",
+                "list_directory",
+            ],
+            "state": [
+                "get_node_info",
+                "list_nodes",
+                "get_best_node",
+                "get_search_stats",
+            ],
+        },
+        description="Available tools grouped by category (18 tools across 4 categories)",
+    )
+
+    phase_tool_map: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "phase0": [
+                "semantic_scholar_search",
+                "semantic_scholar_references",
+                "semantic_scholar_citations",
+                "crossref_search",
+                "arxiv_search",
+                "web_search",
+            ],
+            "phase2": [
+                "get_node_info",
+                "list_nodes",
+                "get_best_node",
+                "get_search_stats",
+                "read_metrics",
+                "read_experiment_log",
+                "read_file",
+            ],
+            "phase3": [
+                "read_file",
+                "write_file",
+                "read_experiment_log",
+                "execute_code_snippet",
+                "read_metrics",
+                "list_directory",
+            ],
+            "phase7": [
+                "semantic_scholar_search",
+                "web_search",
+                "execute_code_snippet",
+                "read_file",
+                "read_metrics",
+                "list_directory",
+            ],
+        },
+        description="Phase-specific tool restrictions for safety/efficiency",
+    )
+
+
+class FunctionsConfig(BaseModel):
+    """Function availability and tool bindings (§5.8.3)."""
+
+    available_functions: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "search": ["search_draft", "search_debug", "search_improve"],
+            "execution": ["experiment_code_gen"],
+            "spec": ["spec_generation_problem", "spec_generation_plan"],
+            "paper": [
+                "paper_outline",
+                "paper_draft",
+                "paper_reflection",
+                "aggregate_plot_generation",
+                "aggregate_plot_fix",
+                "citation_identify",
+                "citation_select",
+                "citation_bibtex",
+            ],
+            "evaluation": ["paper_review", "paper_review_reflection", "meta_review"],
+            "phase0": ["query_generation", "paper_clustering"],
+        },
+        description="Available functions grouped by phase/category (19 functions)",
+    )
+
+    function_tool_bindings: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "search_draft": ["get_node_info", "list_nodes", "read_metrics"],
+            "search_debug": ["read_experiment_log", "read_file", "execute_code_snippet"],
+            "search_improve": ["get_best_node", "read_metrics", "get_search_stats"],
+            "experiment_code_gen": ["read_file", "execute_code_snippet"],
+            "query_generation": ["semantic_scholar_search", "arxiv_search"],
+            "citation_identify": ["semantic_scholar_search", "web_search"],
+            "citation_select": ["semantic_scholar_search"],
+            "aggregate_plot_generation": ["execute_code_snippet"],
+            "aggregate_plot_fix": ["execute_code_snippet"],
+            "paper_clustering": ["semantic_scholar_search"],
+        },
+        description="Function-to-tool bindings (functions not listed here are SINGLE_SHOT)",
+    )
+
+
+class AgentCommandsConfig(BaseModel):
+    """Agent commands configuration: tools + functions + loop settings (§5.8)."""
+
+    tools: ToolsConfig = Field(default_factory=ToolsConfig, description="Tool configuration")
+    functions: FunctionsConfig = Field(default_factory=FunctionsConfig, description="Function configuration")
+    loop_defaults: LoopDefaults = Field(default_factory=LoopDefaults, description="AgentLoop default parameters")
+    function_loop_overrides: dict[str, FunctionLoopOverride] = Field(
+        default_factory=lambda: {
+            "search_draft": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "search_debug": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "search_improve": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "experiment_code_gen": FunctionLoopOverride(max_steps=8, tool_call_budget=15, timeout_sec=180),
+            "query_generation": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "citation_identify": FunctionLoopOverride(max_steps=8, tool_call_budget=15, timeout_sec=180),
+            "citation_select": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "aggregate_plot_generation": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "aggregate_plot_fix": FunctionLoopOverride(max_steps=5, tool_call_budget=10, timeout_sec=120),
+            "paper_clustering": FunctionLoopOverride(max_steps=3, tool_call_budget=5, timeout_sec=60),
+        },
+        description="Per-function loop config overrides (§5.8.5)",
+    )
+
+
+class ToolConfig(BaseModel):
+    """Tool execution engine configuration — backward-compatible wrapper.
+
+    This wraps the full AgentCommandsConfig (§5.8) while keeping the flat
+    fields used by existing code (enabled, max_steps_per_loop, etc.).
+    """
+
+    enabled: bool = Field(False, description="Enable tool execution via AgentLoop")
+    max_steps_per_loop: int = Field(10, description="Max ReAct loop steps")
+    tool_call_budget_per_loop: int = Field(20, description="Tool call budget per loop")
+    observation_max_tokens: int = Field(2000, description="Max tokens per tool observation")
+    loop_timeout_sec: float = Field(300.0, description="Loop timeout in seconds")
+    api_rate_limit_per_minute: int = Field(30, description="External API rate limit")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_from_agent_commands(cls, data: Any) -> Any:
+        """Accept agent_commands nested format and flatten for backward compat."""
+        if isinstance(data, dict):
+            # If coming from nested agent_commands format, extract flat fields
+            tools = data.get("tools", {})
+            if isinstance(tools, dict) and "enabled" in tools:
+                data.setdefault("enabled", tools["enabled"])
+            loop_defaults = data.get("loop_defaults", {})
+            if isinstance(loop_defaults, dict):
+                if "max_steps" in loop_defaults:
+                    data.setdefault("max_steps_per_loop", loop_defaults["max_steps"])
+                if "tool_call_budget" in loop_defaults:
+                    data.setdefault("tool_call_budget_per_loop", loop_defaults["tool_call_budget"])
+                if "observation_max_tokens" in loop_defaults:
+                    data.setdefault("observation_max_tokens", loop_defaults["observation_max_tokens"])
+                if "timeout_sec" in loop_defaults:
+                    data.setdefault("loop_timeout_sec", loop_defaults["timeout_sec"])
+        return data
+
+
 class PlanSpecModel(BaseModel):
     """Top-level plan specification."""
 
@@ -131,6 +327,11 @@ class PlanSpecModel(BaseModel):
     turn_rewards: TurnRewardSpec | None = Field(None, description="MT-GRPO/HiPER turn-level reward spec")
     echo: EchoConfig = Field(default_factory=EchoConfig, description="ECHO failure knowledge config")
     hiper: HiperConfig | None = Field(None, description="HiPER hierarchical advantage config")
+    tools: ToolConfig = Field(default_factory=ToolConfig, description="Tool execution engine config (flat/compat)")
+    agent_commands: AgentCommandsConfig = Field(
+        default_factory=AgentCommandsConfig,
+        description="Full agent commands config: tools, functions, loop settings (§5.8)",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -140,6 +341,15 @@ class PlanSpecModel(BaseModel):
             ss = data.get("search_strategy")
             if isinstance(ss, str):
                 data["search_strategy"] = {"name": ss, "description": ""}
+            # Sync agent_commands.tools.enabled with tools.enabled
+            ac = data.get("agent_commands", {})
+            tc = data.get("tools", {})
+            if isinstance(ac, dict) and isinstance(tc, dict):
+                ac_tools = ac.get("tools", {})
+                if isinstance(ac_tools, dict) and "enabled" in tc and "enabled" not in ac_tools:
+                    ac_tools["enabled"] = tc["enabled"]
+                    ac["tools"] = ac_tools
+                    data["agent_commands"] = ac
         return data
 
     # -- YAML helpers ----------------------------------------------------------

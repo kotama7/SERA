@@ -69,6 +69,26 @@ def _parse_json(self, response: str) -> dict | None
 3. マッチしない場合はレスポンス全体を `json.loads()` で直接パース
 4. いずれも失敗した場合は `None` を返す
 
+### build_model_spec(cli_args: dict) -> dict
+
+CLI 引数から ModelSpec を構築する同期メソッド。
+
+- `infer_model_family(base_model_id)` でモデルファミリを自動推定
+- ファミリに応じたデフォルト `target_modules` を `_DEFAULT_MODEL_FAMILIES` から取得
+- `BaseModelConfig.family` を自動設定
+
+### build_resource_spec(cli_args: dict) -> dict
+
+CLI 引数から ResourceSpec を構築する同期メソッド。
+
+- `executor`, `gpu_count`, `memory_gb`, `cpu_cores`, `gpu_type`, `gpu_required`, `timeout`, `no_web`, `work_dir` を受け取る
+
+### build_execution_spec(cli_args: dict) -> dict
+
+CLI 引数から ExecutionSpec を構築する同期メソッド。
+
+- `max_nodes`, `max_depth`, `branch_factor`, `lambda_cost`, `beta`, `repeats`, `lcb_coef`, `no_sequential`, `seq_topk`, `lr`, `clip`, `ppo_steps` を受け取る
+
 ### スキーマ説明ヘルパー
 
 - `_problem_spec_schema()`: ProblemSpec に必要なフィールド（title, objective, constraints, secondary_metrics, manipulated_variables, observed_variables, evaluation_design, experiment_template）を記述した文字列を返す
@@ -107,6 +127,17 @@ def _parse_json(self, response: str) -> dict | None
 | `resource_spec.yaml` | `resource` |
 | `plan_spec.yaml` | `plan` |
 | `execution_spec.yaml` | `execution` |
+
+### _validate_agent_commands(plan_spec) [staticmethod]
+
+`PlanSpecModel.agent_commands` の整合性を検証する（§5.8.4）。`freeze()` から ExecutionSpec ロック前に呼び出される。
+
+**チェック項目:**
+
+1. **ツール存在チェック**: `function_tool_bindings` で参照される各ツールが `available_tools` のいずれかのカテゴリに存在するか。存在しない場合は警告をログ出力
+2. **Phase ツール整合性チェック**: `available_functions` から関数→Phase の逆引きマップを構築し、`function_tool_bindings` の各バインドツールがその関数の Phase に対応する `phase_tool_map` のサブセットであるかを検証。違反がある場合は警告をログ出力
+
+いずれも警告ログのみでプロセスは継続する。`agent_commands` が `None` の場合はスキップされる。
 
 ### verify(specs_dir: Path) -> bool
 

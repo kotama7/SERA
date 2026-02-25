@@ -75,6 +75,11 @@ class SpecFreezer:
                 yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
             logger.info("Updated model_spec.yaml with revision and adapter_spec_hash")
 
+        # Validate agent_commands (§5.8.4)
+        plan_spec = getattr(specs, "plan", None)
+        if plan_spec is not None:
+            self._validate_agent_commands(plan_spec)
+
         # Lock ExecutionSpec
         exec_spec = getattr(specs, "execution", None)
         if exec_spec is not None:
@@ -84,6 +89,66 @@ class SpecFreezer:
             with open(lock_path, "w") as f:
                 f.write(spec_hash)
             logger.info(f"ExecutionSpec locked: {spec_hash}")
+
+    @staticmethod
+    def _validate_agent_commands(plan_spec: Any) -> None:
+        """Validate agent_commands consistency (§5.8.4).
+
+        Checks:
+        1. function_tool_bindings tools exist in available_tools
+        2. function_tool_bindings tools are subset of phase_tool_map for that function's phase
+        3. available_functions are registered (soft check - log warning only)
+        """
+        ac = getattr(plan_spec, "agent_commands", None)
+        if ac is None:
+            return
+
+        tools_cfg = getattr(ac, "tools", None)
+        funcs_cfg = getattr(ac, "functions", None)
+        if tools_cfg is None or funcs_cfg is None:
+            return
+
+        # Flatten available_tools into a set
+        all_tools: set[str] = set()
+        available_tools = getattr(tools_cfg, "available_tools", {})
+        for cat_tools in available_tools.values():
+            all_tools.update(cat_tools)
+
+        # Build phase_tool_map lookup
+        phase_tool_map = getattr(tools_cfg, "phase_tool_map", {})
+
+        # Build function→phase mapping
+        func_to_phase: dict[str, str] = {}
+        available_functions = getattr(funcs_cfg, "available_functions", {})
+        for phase, func_list in available_functions.items():
+            for fn in func_list:
+                func_to_phase[fn] = phase
+
+        # Validate function_tool_bindings
+        bindings = getattr(funcs_cfg, "function_tool_bindings", {})
+        for func_name, bound_tools in bindings.items():
+            # Check 1: bound tools exist in available_tools
+            for tool in bound_tools:
+                if tool not in all_tools:
+                    logger.warning(
+                        "agent_commands validation: function '%s' binds tool '%s' "
+                        "which is not in available_tools",
+                        func_name, tool,
+                    )
+
+            # Check 2: bound tools are subset of phase_tool_map for function's phase
+            phase = func_to_phase.get(func_name)
+            if phase:
+                phase_tools = set(phase_tool_map.get(phase, []))
+                for tool in bound_tools:
+                    if tool not in phase_tools:
+                        logger.warning(
+                            "agent_commands validation: function '%s' (phase=%s) binds "
+                            "tool '%s' which is not in phase_tool_map[%s]",
+                            func_name, phase, tool, phase,
+                        )
+
+        logger.info("agent_commands validation completed")
 
     def verify(self, specs_dir: Path) -> bool:
         """

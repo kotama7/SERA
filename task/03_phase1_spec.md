@@ -1,6 +1,6 @@
 # SERA 要件定義書 — Phase 1: Spec確定
 
-> 本ファイルは TASK.md v12.4 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -16,14 +16,18 @@
 1. Phase 0 出力（RelatedWorkSpec, PaperSpec, PaperScoreSpec, TeacherPaperSet）をロード
 2. LLM（AgentLLM、LoRA無し）に Input-1 + Phase 0 出力を与え、以下のSpec草案を生成：
    a. ProblemSpec（§5.5）
-   b. PlanSpec（§5.7）
+   b. PlanSpec（§5.7）— agent_commands（§5.8）を含む
 3. ユーザが ModelSpec（§5.3）と ResourceSpec（§5.6）を確認・修正
    - CLIモード: 生成されたYAMLをエディタで開き、保存で確定
    - 自動モード（--auto）: LLM生成のまま確定
 4. ExecutionSpec（§5.4）を CLI 引数 + 既定値から構築
-5. 全Spec を specs/ に保存
-6. ExecutionSpec の SHA-256 ハッシュを specs/execution_spec.yaml.lock に記録
-7. 以後、ExecutionSpec のロード時にハッシュを検証（不一致は致命的エラー）
+5. agent_commands の整合性検証（§5.8.4）:
+   - function_tool_bindings の各ツールが available_tools に含まれるか
+   - function_tool_bindings のツールが phase_tool_map のサブセットか
+   - available_functions の全関数が AgentFunctionRegistry に登録済みか
+6. 全Spec を specs/ に保存
+7. ExecutionSpec の SHA-256 ハッシュを specs/execution_spec.yaml.lock に記録
+8. 以後、ExecutionSpec のロード時にハッシュを検証（不一致は致命的エラー）
 ```
 
 ### 5.3 ModelSpec（LoRA形状固定：必須）
@@ -290,6 +294,136 @@ plan_spec:
         evaluator: "paper_score_delta"     # PaperScore改善幅
         weight: 0.15
 
+  agent_commands:                  # エージェントが使用可能なツール・関数の定義（§5.8）
+    tools:
+      enabled: true                # ツール実行エンジン（AgentLoop）を有効化するか
+      api_rate_limit_per_minute: 30  # 外部API系ツールのレート制限
+
+      # --- 利用可能ツール一覧（18ツール、カテゴリ別） ---
+      available_tools:
+        search:                    # Web/API 検索ツール
+          - "semantic_scholar_search"
+          - "semantic_scholar_references"
+          - "semantic_scholar_citations"
+          - "crossref_search"
+          - "arxiv_search"
+          - "web_search"
+        execution:                 # コード実行ツール
+          - "execute_experiment"
+          - "execute_code_snippet"
+          - "run_shell_command"
+        file:                      # ファイル操作ツール
+          - "read_file"
+          - "write_file"
+          - "read_metrics"
+          - "read_experiment_log"
+          - "list_directory"
+        state:                     # 探索状態参照ツール
+          - "get_node_info"
+          - "list_nodes"
+          - "get_best_node"
+          - "get_search_stats"
+
+      # --- Phase別ツール許可マップ ---
+      # 各Phaseで使用可能なツールを制限（安全性・効率性のため）
+      phase_tool_map:
+        phase0:                    # 先行研究収集
+          - "semantic_scholar_search"
+          - "semantic_scholar_references"
+          - "semantic_scholar_citations"
+          - "crossref_search"
+          - "arxiv_search"
+          - "web_search"
+        phase2:                    # 探索木生成（仮説立案）
+          - "get_node_info"
+          - "list_nodes"
+          - "get_best_node"
+          - "get_search_stats"
+          - "read_metrics"
+          - "read_experiment_log"
+          - "read_file"
+        phase3:                    # 実験実行（コード生成）
+          - "read_file"
+          - "write_file"
+          - "read_experiment_log"
+          - "execute_code_snippet"
+          - "read_metrics"
+          - "list_directory"
+        phase7:                    # 論文生成
+          - "semantic_scholar_search"
+          - "web_search"
+          - "execute_code_snippet"
+          - "read_file"
+          - "read_metrics"
+          - "list_directory"
+
+    functions:
+      # --- 利用可能関数一覧（19関数、Phase別） ---
+      available_functions:
+        search:                    # 探索系（Phase 2）
+          - "search_draft"         # 新規アプローチ起草
+          - "search_debug"         # エラー修復
+          - "search_improve"       # 原子的改善
+        execution:                 # 実行系（Phase 3）
+          - "experiment_code_gen"  # 実験コード生成
+        spec:                      # Spec生成系（Phase 1）
+          - "spec_generation_problem"  # ProblemSpec生成
+          - "spec_generation_plan"     # PlanSpec生成
+        paper:                     # 論文系（Phase 7）
+          - "paper_outline"
+          - "paper_draft"
+          - "paper_reflection"
+          - "aggregate_plot_generation"
+          - "aggregate_plot_fix"
+          - "citation_identify"
+          - "citation_select"
+          - "citation_bibtex"
+        evaluation:                # 評価系（Phase 8）
+          - "paper_review"
+          - "paper_review_reflection"
+          - "meta_review"
+        phase0:                    # 先行研究系（Phase 0）
+          - "query_generation"
+          - "paper_clustering"
+
+      # --- 関数→ツールバインディング ---
+      # AgentLoop使用時に各関数が呼び出せるツール（allowed_tools = None の関数は単発生成）
+      function_tool_bindings:
+        search_draft: ["get_node_info", "list_nodes", "read_metrics"]
+        search_debug: ["read_experiment_log", "read_file", "execute_code_snippet"]
+        search_improve: ["get_best_node", "read_metrics", "get_search_stats"]
+        experiment_code_gen: ["read_file", "execute_code_snippet"]
+        query_generation: ["semantic_scholar_search", "arxiv_search"]
+        citation_identify: ["semantic_scholar_search", "web_search"]
+        citation_select: ["semantic_scholar_search"]
+        aggregate_plot_generation: ["execute_code_snippet"]
+        aggregate_plot_fix: ["execute_code_snippet"]
+        paper_clustering: ["semantic_scholar_search"]
+        # 以下の関数は allowed_tools = null（常に単発生成）
+        # spec_generation_problem, spec_generation_plan,
+        # paper_outline, paper_draft, paper_reflection, citation_bibtex,
+        # paper_review, paper_review_reflection, meta_review
+
+    loop_defaults:                 # AgentLoop 既定パラメータ
+      max_steps: 10                # ReActループの最大ステップ数
+      tool_call_budget: 20         # ループあたりのツール呼び出し上限
+      observation_max_tokens: 2000 # ツール観測結果の最大トークン数
+      timeout_sec: 300.0           # ループタイムアウト（秒）
+
+    # --- 関数別 loop_config オーバーライド ---
+    # loop_defaults と異なる値を持つ関数のみ記載
+    function_loop_overrides:
+      search_draft:       { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      search_debug:       { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      search_improve:     { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      experiment_code_gen: { max_steps: 8, tool_call_budget: 15, timeout_sec: 180 }
+      query_generation:   { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      citation_identify:  { max_steps: 8, tool_call_budget: 15, timeout_sec: 180 }
+      citation_select:    { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      aggregate_plot_generation: { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      aggregate_plot_fix: { max_steps: 5, tool_call_budget: 10, timeout_sec: 120 }
+      paper_clustering:   { max_steps: 3, tool_call_budget: 5, timeout_sec: 60 }
+
   logging:
     log_every_node: true
     log_llm_prompts: true          # LLMへの入出力を全記録
@@ -301,5 +435,53 @@ plan_spec:
     save_pruned: false             # 剪定されたノードの結果を保持するか
     export_format: "json"          # "json" | "yaml"
 ```
+
+### 5.8 agent_commands 設計説明
+
+#### 5.8.1 概要
+`agent_commands` は PlanSpec 内でエージェントが使用可能な**ツール**（外部操作）と**関数**（LLM呼び出しタスク）を Phase 1 で確定する。Phase 1 以降、この定義は ExecutionSpec と同様に凍結され変更禁止となる。
+
+#### 5.8.2 ツール（18種）とカテゴリ
+
+| カテゴリ | ツール数 | 用途 | 実装モジュール |
+|---------|---------|------|--------------|
+| search | 6 | Web/API経由の論文・情報検索 | `agent/tools/search_tools.py` |
+| execution | 3 | コード実行・実験実行 | `agent/tools/execution_tools.py` |
+| file | 5 | ファイル読み書き・メトリクス参照 | `agent/tools/file_tools.py` |
+| state | 4 | 探索木の状態参照 | `agent/tools/state_tools.py` |
+
+#### 5.8.3 関数（19種）と呼び出しパターン
+
+| パターン | 関数数 | 条件 | 動作 |
+|---------|--------|------|------|
+| AGENT_LOOP | 10 | `tools.enabled=true` かつ `function_tool_bindings` にエントリあり | AgentLoop（ReActループ）経由でツールを使いながら生成 |
+| SINGLE_SHOT | 9 | `function_tool_bindings` にエントリなし | 単発 `generate()` で処理 |
+
+`tools.enabled=false` の場合、全19関数が SINGLE_SHOT にフォールバックする。
+
+#### 5.8.4 phase_tool_map の意味
+
+各 Phase で AgentLoop が使用できるツールを制限する。`function_tool_bindings` で定義された関数のツールは、その関数が属する Phase の `phase_tool_map` のサブセットでなければならない（検証は Phase 1 の freeze 時に実行）。
+
+```text
+検証ルール:
+  ∀ func ∈ available_functions:
+    func.function_tool_bindings ⊆ phase_tool_map[func.phase]
+```
+
+#### 5.8.5 loop_defaults と function_loop_overrides
+
+`loop_defaults` は AgentLoop の全体既定値。`function_loop_overrides` で関数ごとに上書きできる。上書きされていないフィールドは `loop_defaults` の値を継承する。
+
+#### 5.8.6 既存コードとの対応
+
+| PlanSpec フィールド | 対応する実装 |
+|-------------------|------------|
+| `tools.enabled` | `ToolConfig.enabled` (`plan_spec.py`) |
+| `tools.available_tools` | `ToolExecutor.ALL_TOOL_NAMES` (`tool_executor.py`) |
+| `functions.available_functions` | `REGISTRY.list_all()` (`agent_functions.py`) |
+| `functions.function_tool_bindings` | `AgentFunction.allowed_tools` （各関数定義） |
+| `loop_defaults` | `ToolConfig.max_steps_per_loop` 等 (`plan_spec.py`) |
+| `function_loop_overrides` | `AgentFunction.loop_config` （各関数定義） |
 
 ---

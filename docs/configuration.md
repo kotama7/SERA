@@ -189,6 +189,26 @@ Phase 7 の論文生成に関する設定です。
 |---|---|---|
 | `--base-model` | `BaseModelConfig.id` | `"Qwen/Qwen2.5-Coder-7B-Instruct"` |
 | `--dtype` | `BaseModelConfig.dtype` | `"bf16"` |
+
+**モデルファミリ自動検出**: `--base-model` で指定されたモデル ID から `BaseModelConfig.family` が自動推定される（`infer_model_family()`）。ファミリに応じて LoRA の `target_modules` がデフォルト値から自動設定される。
+
+| モデルファミリ | 推定パターン | デフォルト target_modules | プロンプト形式 |
+|---|---|---|---|
+| `qwen2` | ID に "qwen" を含む | `q_proj`, `k_proj`, `v_proj` | ChatML |
+| `llama3` | ID に "llama-3" / "llama3" を含む | `q_proj`, `k_proj`, `v_proj`, `o_proj` | Llama3 |
+| `deepseek` | ID に "deepseek" を含む | `q_proj`, `v_proj` | DeepSeek |
+| `codellama` | ID に "codellama" を含む | `q_proj`, `v_proj` | Llama2 |
+
+カスタムモデルファミリは `model_spec.yaml` の `model_families` フィールドで定義可能:
+
+```yaml
+model_families:
+  my_custom_model:
+    chat_template: "chatml"
+    prompt_format: "chatml"
+    supports_system_prompt: true
+    default_target_modules: ["q_proj", "v_proj", "gate_proj"]
+```
 | `--agent-llm` | `AgentLLMConfig`（`"provider:model_id"` 形式） | `"local:same_as_base"` |
 | `--executor` | `ComputeConfig.executor_type`（`"local"`, `"slurm"`, `"docker"`） | `"local"` |
 | `--gpu-count` | `ComputeConfig.gpu_count` | `1` |
@@ -388,6 +408,183 @@ hiper:
 ```
 
 **後方互換性**: 旧 YAML にこれらのフィールドがなくても Pydantic デフォルト値で動作します（`method="outcome_rm"`, `echo.enabled=false`, `turn_rewards=None`, `hiper=None`）。
+
+### AgentCommandsConfig（エージェントコマンド設定）
+
+`PlanSpecModel.agent_commands` はツール・関数・ループ設定を一括管理するモデルです（§5.8）。
+
+#### ToolsConfig（ツール設定）
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `enabled` | `bool` | `False` | ツール実行を有効にするか |
+| `api_rate_limit_per_minute` | `int` | `30` | 外部 API のレート制限 |
+| `available_tools` | `dict[str, list[str]]` | 下記参照 | カテゴリ別の利用可能ツール（4 カテゴリ・18 ツール） |
+| `phase_tool_map` | `dict[str, list[str]]` | 下記参照 | Phase ごとのツール制限 |
+
+**available_tools のデフォルト（4 カテゴリ・18 ツール）:**
+
+| カテゴリ | ツール |
+|---------|--------|
+| `search` | `semantic_scholar_search`, `semantic_scholar_references`, `semantic_scholar_citations`, `crossref_search`, `arxiv_search`, `web_search` |
+| `execution` | `execute_experiment`, `execute_code_snippet`, `run_shell_command` |
+| `file` | `read_file`, `write_file`, `read_metrics`, `read_experiment_log`, `list_directory` |
+| `state` | `get_node_info`, `list_nodes`, `get_best_node`, `get_search_stats` |
+
+**phase_tool_map のデフォルト:**
+
+| Phase | 許可ツール |
+|-------|----------|
+| `phase0` | `semantic_scholar_search`, `semantic_scholar_references`, `semantic_scholar_citations`, `crossref_search`, `arxiv_search`, `web_search` |
+| `phase2` | `get_node_info`, `list_nodes`, `get_best_node`, `get_search_stats`, `read_metrics`, `read_experiment_log`, `read_file` |
+| `phase3` | `read_file`, `write_file`, `read_experiment_log`, `execute_code_snippet`, `read_metrics`, `list_directory` |
+| `phase7` | `semantic_scholar_search`, `web_search`, `execute_code_snippet`, `read_file`, `read_metrics`, `list_directory` |
+
+#### FunctionsConfig（関数設定）
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `available_functions` | `dict[str, list[str]]` | 下記参照 | カテゴリ別の利用可能関数（6 カテゴリ・19 関数） |
+| `function_tool_bindings` | `dict[str, list[str]]` | 下記参照 | 関数→ツールバインディング（未登録の関数は SINGLE_SHOT） |
+
+**available_functions のデフォルト（6 カテゴリ・19 関数）:**
+
+| カテゴリ | 関数 |
+|---------|------|
+| `search` | `search_draft`, `search_debug`, `search_improve` |
+| `execution` | `experiment_code_gen` |
+| `spec` | `spec_generation_problem`, `spec_generation_plan` |
+| `paper` | `paper_outline`, `paper_draft`, `paper_reflection`, `aggregate_plot_generation`, `aggregate_plot_fix`, `citation_identify`, `citation_select`, `citation_bibtex` |
+| `evaluation` | `paper_review`, `paper_review_reflection`, `meta_review` |
+| `phase0` | `query_generation`, `paper_clustering` |
+
+**function_tool_bindings のデフォルト（10 バインディング）:**
+
+| 関数名 | バインドされるツール |
+|--------|-------------------|
+| `search_draft` | `get_node_info`, `list_nodes`, `read_metrics` |
+| `search_debug` | `read_experiment_log`, `read_file`, `execute_code_snippet` |
+| `search_improve` | `get_best_node`, `read_metrics`, `get_search_stats` |
+| `experiment_code_gen` | `read_file`, `execute_code_snippet` |
+| `query_generation` | `semantic_scholar_search`, `arxiv_search` |
+| `citation_identify` | `semantic_scholar_search`, `web_search` |
+| `citation_select` | `semantic_scholar_search` |
+| `aggregate_plot_generation` | `execute_code_snippet` |
+| `aggregate_plot_fix` | `execute_code_snippet` |
+| `paper_clustering` | `semantic_scholar_search` |
+
+#### LoopDefaults（ループデフォルト設定）
+
+`agent_commands.loop_defaults` で AgentLoop のデフォルトパラメータを設定します。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `max_steps` | `int` | `10` | ReAct ループの最大ステップ数 |
+| `tool_call_budget` | `int` | `20` | ループあたりのツール呼び出し上限 |
+| `observation_max_tokens` | `int` | `2000` | ツール観察の最大トークン数 |
+| `timeout_sec` | `float` | `300.0` | ループのタイムアウト（秒） |
+
+#### FunctionLoopOverride（関数別ループオーバーライド）
+
+`agent_commands.function_loop_overrides` で関数ごとに `LoopDefaults` を上書きできます。各フィールドが `None` の場合は `loop_defaults` の値が使われます。
+
+**デフォルトのオーバーライド:**
+
+| 関数名 | max_steps | tool_call_budget | timeout_sec |
+|--------|-----------|-----------------|-------------|
+| `search_draft` | 5 | 10 | 120 |
+| `search_debug` | 5 | 10 | 120 |
+| `search_improve` | 5 | 10 | 120 |
+| `experiment_code_gen` | 8 | 15 | 180 |
+| `query_generation` | 5 | 10 | 120 |
+| `citation_identify` | 8 | 15 | 180 |
+| `citation_select` | 5 | 10 | 120 |
+| `aggregate_plot_generation` | 5 | 10 | 120 |
+| `aggregate_plot_fix` | 5 | 10 | 120 |
+| `paper_clustering` | 3 | 5 | 60 |
+
+#### ToolConfig（後方互換ラッパー）
+
+`PlanSpecModel.tools` はフラットなフィールド構成で既存コードとの後方互換性を提供します。`agent_commands` のネスト形式が渡された場合、`_migrate_from_agent_commands` バリデータが自動的にフラットフィールドに変換します。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `enabled` | `bool` | `False` | ツール実行を有効にするか |
+| `max_steps_per_loop` | `int` | `10` | ReAct ループの最大ステップ数 |
+| `tool_call_budget_per_loop` | `int` | `20` | ツール呼び出し上限 |
+| `observation_max_tokens` | `int` | `2000` | ツール観察の最大トークン数 |
+| `loop_timeout_sec` | `float` | `300.0` | ループタイムアウト（秒） |
+| `api_rate_limit_per_minute` | `int` | `30` | 外部 API レート制限 |
+
+#### agent_commands バリデーション（§5.8.4）
+
+`SpecFreezer.freeze()` は ExecutionSpec ロック前に `_validate_agent_commands()` を呼び出し、以下の整合性チェックを実行します:
+
+1. **ツール存在チェック**: `function_tool_bindings` で参照されるツールが `available_tools` に存在するか
+2. **Phase ツール整合性チェック**: 関数にバインドされたツールが、その関数の Phase に対応する `phase_tool_map` のサブセットであるか
+
+いずれも警告ログの出力のみで、プロセスは継続します。
+
+### plan_spec.yaml の設定例（agent_commands 含む）
+
+```yaml
+agent_commands:
+  tools:
+    enabled: true
+    api_rate_limit_per_minute: 30
+    available_tools:
+      search:
+        - semantic_scholar_search
+        - crossref_search
+        - arxiv_search
+      execution:
+        - execute_experiment
+        - execute_code_snippet
+      file:
+        - read_file
+        - write_file
+      state:
+        - get_node_info
+        - list_nodes
+    phase_tool_map:
+      phase0:
+        - semantic_scholar_search
+        - crossref_search
+        - arxiv_search
+      phase3:
+        - read_file
+        - write_file
+        - execute_code_snippet
+  functions:
+    available_functions:
+      search:
+        - search_draft
+        - search_debug
+        - search_improve
+      execution:
+        - experiment_code_gen
+    function_tool_bindings:
+      search_draft:
+        - get_node_info
+        - list_nodes
+      experiment_code_gen:
+        - read_file
+        - execute_code_snippet
+  loop_defaults:
+    max_steps: 10
+    tool_call_budget: 20
+    observation_max_tokens: 2000
+    timeout_sec: 300.0
+  function_loop_overrides:
+    search_draft:
+      max_steps: 5
+      tool_call_budget: 10
+      timeout_sec: 120
+    experiment_code_gen:
+      max_steps: 8
+      tool_call_budget: 15
+      timeout_sec: 180
+```
 
 ## 三層変数可変性モデル
 

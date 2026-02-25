@@ -56,6 +56,9 @@ class SearchNode:
     # ECHO: failure knowledge context injected from sibling/ancestor failures
     failure_context: list[dict] = field(default_factory=list)
 
+    # Tool usage metadata (§29.14.3) — persisted in checkpoints
+    tool_usage: dict = field(default_factory=dict)
+
     def to_dict(self) -> dict:
         """Serialize to dict for JSON storage."""
         result: dict[str, Any] = {}

@@ -81,6 +81,8 @@ def run_research(
         executor = DockerExecutor(
             work_dir=workspace,
             docker_config=specs.resource.docker,
+            interpreter_command=interpreter_cmd,
+            seed_arg_format=seed_arg_fmt,
         )
     else:
         from sera.execution.local_executor import LocalExecutor

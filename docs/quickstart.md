@@ -131,7 +131,35 @@ notes: ""
 | `constraints` | ハード制約のリスト（`name`, `type`=`le`/`ge`/`bool`, `threshold`） |
 | `notes` | 自由記述の補足情報 |
 
-## 最小ワークフロー
+## セットアップウィザード（推奨）
+
+対話型ウィザードで Input-1 の作成から Spec 凍結まで一括で実行できる。
+
+```bash
+sera setup                         # 対話型ウィザード（日本語）
+sera setup --lang en               # 英語版
+sera setup --resume                # 中断したウィザードの再開
+sera setup --from-input1 input1.yaml  # 既存 Input-1 から Phase 0 以降を実行
+sera setup --skip-phase0           # Phase 0 をスキップ
+```
+
+ウィザードは以下の 11 ステップを順に実行する:
+
+1. データ情報入力
+2. 研究分野入力
+3. タスク定義
+4. 目標設定（方向の自動推定付き）
+5. 制約条件追加
+6. 備考
+7. プレビュー確認
+8. Phase 0 パラメータ設定・実行
+9. 収集論文レビュー
+10. Spec パラメータ設定（GPU/SLURM 自動検出）
+11. Spec 凍結
+
+途中で Ctrl+C を押すと状態が保存され、`--resume` で再開可能。
+
+## 最小ワークフロー（手動）
 
 以下の CLI コマンドで全パイプラインを順に実行する。
 

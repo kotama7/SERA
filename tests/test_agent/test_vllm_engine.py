@@ -84,6 +84,9 @@ class TestVLLMEngineGenerate:
         mock_output.outputs = [MagicMock(text="generated text")]
         engine._llm = MagicMock()
         engine._llm.generate.return_value = [mock_output]
+
+        # Mock tokenizer (no chat template)
+        engine._tokenizer = MagicMock(spec=[])
         return engine
 
     def test_generate_without_adapter(self):

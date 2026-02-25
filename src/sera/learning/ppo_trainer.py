@@ -15,6 +15,7 @@ Library usage:
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,7 @@ class PPOTrainer:
         self.clip_range: float = getattr(learning, "clip_range", 0.2)
         self.lr: float = getattr(learning, "lr", 1e-4)
         self.batch_size: int = getattr(learning, "batch_size", 4)
-        self.mini_batch_size: int = getattr(learning, "mini_batch_size", 2)
+        self.mini_batch_size: int = getattr(learning, "mini_batch_size", 4)
         self.epochs_per_update: int = getattr(learning, "epochs_per_update", 4)
         self.gamma: float = getattr(learning, "gamma", 0.99)
         self.gae_lambda: float = getattr(learning, "gae_lambda", 0.95)
@@ -355,6 +356,42 @@ class PPOTrainer:
         post_weights = {k: v.clone().detach() for k, v in get_peft_model_state_dict(peft_model).items()}
         delta_norm = sum((post_weights[k] - pre_weights[k]).norm().item() ** 2 for k in pre_weights) ** 0.5
 
+        # Save delta to lineage tree (section 9.3 step 6-7)
+        new_adapter_node_id: str | None = None
+        if self.lineage_manager is not None and delta_norm > 0:
+            delta_tensors = {k: post_weights[k] - pre_weights[k] for k in pre_weights}
+            new_adapter_node_id = str(uuid.uuid4())
+
+            # Determine parent adapter_node_id from the first rollout's node
+            parent_adapter_id = "adapter_root"
+            first_node_id = rollouts[0].node_id if rollouts else None
+            # Parent adapter will be resolved by caller via search_manager
+
+            adapter_spec = getattr(self.model_spec, "adapter_spec", None)
+            adapter_spec_hash = getattr(
+                getattr(self.model_spec, "compatibility", None),
+                "adapter_spec_hash",
+                "",
+            )
+
+            try:
+                self.lineage_manager.save_delta(
+                    adapter_node_id=new_adapter_node_id,
+                    parent_id=parent_adapter_id,
+                    delta_tensors=delta_tensors,
+                    search_node_id=first_node_id or "",
+                    depth=0,  # Will be computed from lineage path
+                    adapter_spec_hash=adapter_spec_hash,
+                )
+                logger.info(
+                    "Saved adapter delta %s (norm=%.4f)",
+                    new_adapter_node_id[:8],
+                    delta_norm,
+                )
+            except Exception as e:
+                logger.error("Failed to save adapter delta: %s", e)
+                new_adapter_node_id = None
+
         # Approximate aggregate KL
         mean_kl = total_kl / max(n_updates, 1)
 
@@ -375,6 +412,7 @@ class PPOTrainer:
             "entropy": total_entropy / max(n_updates, 1),
             "delta_norm_l2": delta_norm,
             "kl_coef_current": self.kl_coef,
+            "new_adapter_node_id": new_adapter_node_id,
         }
 
         self.logger.log({"event": "ppo_update", **result})

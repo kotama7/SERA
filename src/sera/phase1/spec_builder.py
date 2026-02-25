@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class SpecBuilder:
-    """Build ProblemSpec and PlanSpec from Input-1 and Phase 0 outputs using LLM."""
+    """Build all specs from Input-1 and Phase 0 outputs using LLM and CLI args."""
 
     def __init__(self, agent_llm: Any):
         self.agent_llm = agent_llm
@@ -27,12 +27,23 @@ class SpecBuilder:
 
         for attempt in range(3):
             temperature = 0.7 + attempt * 0.1
-            response = await self.agent_llm.generate(
-                prompt=prompt,
-                purpose="spec_generation_problem",
-                temperature=temperature,
-            )
-            parsed = self._parse_json(response)
+
+            # Prefer call_function path
+            if hasattr(self.agent_llm, "call_function"):
+                parsed = await self.agent_llm.call_function(
+                    "spec_generation_problem",
+                    prompt=prompt,
+                    purpose="spec_generation_problem",
+                    temperature=temperature,
+                )
+            else:
+                response = await self.agent_llm.generate(
+                    prompt=prompt,
+                    purpose="spec_generation_problem",
+                    temperature=temperature,
+                )
+                parsed = self._parse_json(response)
+
             if parsed is not None:
                 try:
                     from sera.specs.problem_spec import ProblemSpecModel
@@ -65,12 +76,23 @@ class SpecBuilder:
 
         for attempt in range(3):
             temperature = 0.7 + attempt * 0.1
-            response = await self.agent_llm.generate(
-                prompt=prompt,
-                purpose="spec_generation_plan",
-                temperature=temperature,
-            )
-            parsed = self._parse_json(response)
+
+            # Prefer call_function path
+            if hasattr(self.agent_llm, "call_function"):
+                parsed = await self.agent_llm.call_function(
+                    "spec_generation_plan",
+                    prompt=prompt,
+                    purpose="spec_generation_plan",
+                    temperature=temperature,
+                )
+            else:
+                response = await self.agent_llm.generate(
+                    prompt=prompt,
+                    purpose="spec_generation_plan",
+                    temperature=temperature,
+                )
+                parsed = self._parse_json(response)
+
             if parsed is not None:
                 try:
                     from sera.specs.plan_spec import PlanSpecModel
@@ -83,6 +105,135 @@ class SpecBuilder:
 
         from sera.specs.plan_spec import PlanSpecModel
         return PlanSpecModel().model_dump()
+
+    def build_model_spec(self, cli_args: dict) -> dict:
+        """Build ModelSpec from CLI arguments with model family auto-detection.
+
+        Parameters
+        ----------
+        cli_args : dict
+            CLI arguments including: base_model, dtype, agent_llm, rank, alpha.
+        """
+        from sera.specs.model_spec import (
+            ModelSpecModel, BaseModelConfig, AgentLLMConfig, AdapterSpec,
+            infer_model_family,
+        )
+
+        base_model_id = cli_args.get("base_model", "Qwen/Qwen2.5-Coder-7B-Instruct")
+        family = infer_model_family(base_model_id)
+
+        base_model_cfg = BaseModelConfig(
+            id=base_model_id,
+            dtype=cli_args.get("dtype", "bf16"),
+            family=family,
+        )
+
+        agent_llm_str = cli_args.get("agent_llm", "local:same_as_base")
+        if ":" in agent_llm_str:
+            provider, model_id = agent_llm_str.split(":", 1)
+        else:
+            provider, model_id = "local", "same_as_base"
+
+        agent_llm_cfg = AgentLLMConfig(provider=provider, model_id=model_id)
+
+        # Use family-specific default target modules if available
+        from sera.specs.model_spec import _DEFAULT_MODEL_FAMILIES
+        default_targets = ["q_proj", "v_proj"]
+        if family in _DEFAULT_MODEL_FAMILIES:
+            default_targets = _DEFAULT_MODEL_FAMILIES[family].get(
+                "default_target_modules", default_targets
+            )
+
+        adapter_cfg = AdapterSpec(
+            rank=cli_args.get("rank", 16),
+            alpha=cli_args.get("alpha", 32),
+            target_modules=default_targets,
+        )
+
+        model_spec = ModelSpecModel(
+            base_model=base_model_cfg,
+            agent_llm=agent_llm_cfg,
+            adapter_spec=adapter_cfg,
+        )
+        return model_spec.model_dump()
+
+    def build_resource_spec(self, cli_args: dict) -> dict:
+        """Build ResourceSpec from CLI arguments.
+
+        Parameters
+        ----------
+        cli_args : dict
+            CLI arguments including: executor, gpu_count, memory_gb,
+            cpu_cores, gpu_type, gpu_required, timeout, no_web, work_dir.
+        """
+        from sera.specs.resource_spec import (
+            ResourceSpecModel, ComputeConfig, SandboxConfig,
+            StorageConfig, NetworkConfig,
+        )
+
+        compute_cfg = ComputeConfig(
+            executor_type=cli_args.get("executor", "local"),
+            gpu_count=cli_args.get("gpu_count", 1),
+            memory_gb=cli_args.get("memory_gb", 32),
+            cpu_cores=cli_args.get("cpu_cores", 8),
+            gpu_type=cli_args.get("gpu_type", ""),
+            gpu_required=cli_args.get("gpu_required", True),
+        )
+        sandbox_cfg = SandboxConfig(
+            experiment_timeout_sec=cli_args.get("timeout", 3600),
+        )
+        storage_cfg = StorageConfig(
+            work_dir=cli_args.get("work_dir", "./sera_workspace"),
+        )
+        network_cfg = NetworkConfig(
+            allow_internet=not cli_args.get("no_web", False),
+        )
+        resource_spec = ResourceSpecModel(
+            compute=compute_cfg,
+            sandbox=sandbox_cfg,
+            storage=storage_cfg,
+            network=network_cfg,
+        )
+        return resource_spec.model_dump()
+
+    def build_execution_spec(self, cli_args: dict) -> dict:
+        """Build ExecutionSpec from CLI arguments.
+
+        Parameters
+        ----------
+        cli_args : dict
+            CLI arguments including: max_nodes, max_depth, branch_factor,
+            lambda_cost, beta, repeats, lcb_coef, no_sequential, seq_topk,
+            lr, clip, ppo_steps.
+        """
+        from sera.specs.execution_spec import (
+            ExecutionSpecModel, SearchConfig, EvaluationConfig,
+            LearningConfig,
+        )
+
+        search_cfg = SearchConfig(
+            max_nodes=cli_args.get("max_nodes", 100),
+            max_depth=cli_args.get("max_depth", 10),
+            branch_factor=cli_args.get("branch_factor", 3),
+            lambda_cost=cli_args.get("lambda_cost", 0.1),
+            beta_exploration=cli_args.get("beta", 0.05),
+            repeats=cli_args.get("repeats", 3),
+            lcb_coef=cli_args.get("lcb_coef", 1.96),
+            sequential_eval=not cli_args.get("no_sequential", False),
+            sequential_eval_topk=cli_args.get("seq_topk", 5),
+        )
+        eval_cfg = EvaluationConfig()
+        learn_cfg = LearningConfig(
+            lr=cli_args.get("lr", 1e-4),
+            clip_range=cli_args.get("clip", 0.2),
+            steps_per_update=cli_args.get("ppo_steps", 128),
+        )
+        exec_spec = ExecutionSpecModel(
+            search=search_cfg,
+            evaluation=eval_cfg,
+            learning=learn_cfg,
+        )
+        return exec_spec.model_dump()
 
     def _build_context(self, input1: Any, related_work: Any) -> str:
         """Build context string from Input-1 and RelatedWorkSpec."""

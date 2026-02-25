@@ -35,6 +35,9 @@ class PaperSpec:
     doi: str = ""
     arxiv_id: str = ""
     source_api: str = ""
+    relevance_score: float = 0.5
+    retrieval_query: str = ""
+    retrieved_at: str = ""
 
 
 @dataclass
@@ -44,6 +47,26 @@ class ClusterSpec:
     label: str
     description: str = ""
     paper_ids: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BaselineCandidate:
+    """A baseline method candidate extracted from top-cited papers."""
+
+    name: str = ""
+    paper_id: str = ""
+    reported_metric: str = ""
+    method_summary: str = ""
+
+
+@dataclass
+class OpenProblem:
+    """An open problem identified from clustering analysis."""
+
+    description: str = ""
+    related_paper_ids: list[str] = field(default_factory=list)
+    severity: str = "medium"
 
 
 @dataclass
@@ -53,6 +76,9 @@ class RelatedWorkSpec:
     papers: list[PaperSpec] = field(default_factory=list)
     clusters: list[ClusterSpec] = field(default_factory=list)
     scores: list[PaperScoreSpec] = field(default_factory=list)
+    baseline_candidates: list[BaselineCandidate] = field(default_factory=list)
+    common_metrics: list[str] = field(default_factory=list)
+    open_problems: list[OpenProblem] = field(default_factory=list)
 
 
 @dataclass
