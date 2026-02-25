@@ -44,11 +44,14 @@ class GenerationOutput:
     text: str | None = None
     tool_calls: list[ToolCall] | None = None
     purpose: str = ""
+    text_log_prob: float | None = None
+    tool_call_log_probs: list[float] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Prompt formatters per model family (§25.3.2)
 # ---------------------------------------------------------------------------
+
 
 class _PromptFormatter:
     """Base prompt formatter — model-agnostic passthrough."""
@@ -135,18 +138,17 @@ class AgentLLM:
         self._client = None
         self._current_adapter_id: str | None = None
         self._mock_fn = None  # For testing
+        self._tool_executor = None  # Set externally for AgentLoop branching
+        self._plan_spec = None  # Set externally for function_tool_bindings resolution
+        self._last_loop_result = None  # Last AgentLoop result for learning integration
         self.lineage_manager = None  # Set externally for adapter loading via peft
 
         # vLLM inference engine (lazy init)
         self._vllm_engine = None
-        self._inference_engine = getattr(
-            getattr(model_spec, "inference", None), "engine", "transformers"
-        )
+        self._inference_engine = getattr(getattr(model_spec, "inference", None), "engine", "transformers")
 
         # Model family for prompt formatting (§25.3.2)
-        self._model_family: str = getattr(
-            getattr(model_spec, "base_model", None), "family", ""
-        )
+        self._model_family: str = getattr(getattr(model_spec, "base_model", None), "family", "")
         self._prompt_format: str = "default"
         if self._model_family:
             family_cfg = getattr(model_spec, "get_family_config", lambda: None)()
@@ -158,14 +160,8 @@ class AgentLLM:
                 import openai
 
                 api_key_env = getattr(resource_spec, "api_keys", None)
-                key_name = (
-                    getattr(api_key_env, "openai", "OPENAI_API_KEY")
-                    if api_key_env
-                    else "OPENAI_API_KEY"
-                )
-                self._client = openai.AsyncOpenAI(
-                    api_key=os.environ.get(key_name, "")
-                )
+                key_name = getattr(api_key_env, "openai", "OPENAI_API_KEY") if api_key_env else "OPENAI_API_KEY"
+                self._client = openai.AsyncOpenAI(api_key=os.environ.get(key_name, ""))
             except ImportError:
                 pass
         elif provider_name == "anthropic":
@@ -174,13 +170,9 @@ class AgentLLM:
 
                 api_key_env = getattr(resource_spec, "api_keys", None)
                 key_name = (
-                    getattr(api_key_env, "anthropic", "ANTHROPIC_API_KEY")
-                    if api_key_env
-                    else "ANTHROPIC_API_KEY"
+                    getattr(api_key_env, "anthropic", "ANTHROPIC_API_KEY") if api_key_env else "ANTHROPIC_API_KEY"
                 )
-                self._client = anthropic.AsyncAnthropic(
-                    api_key=os.environ.get(key_name, "")
-                )
+                self._client = anthropic.AsyncAnthropic(api_key=os.environ.get(key_name, ""))
             except ImportError:
                 pass
 
@@ -238,9 +230,62 @@ class AgentLLM:
             validate_against_schema,
         )
 
+        # Ensure all function modules are imported so REGISTRY is populated
+        import sera.agent.functions  # noqa: F401
+
         func = REGISTRY.get(function_name)
         purpose = purpose or function_name
         temp = temperature if temperature is not None else func.default_temperature
+
+        # Resolve allowed_tools and loop_config from PlanSpec if not set on the function
+        effective_allowed_tools = func.allowed_tools
+        effective_loop_config = func.loop_config
+        if effective_allowed_tools is None and self._plan_spec is not None:
+            ac = getattr(self._plan_spec, "agent_commands", None)
+            if ac is not None:
+                funcs_cfg = getattr(ac, "functions", None)
+                if funcs_cfg is not None:
+                    bindings = getattr(funcs_cfg, "function_tool_bindings", {})
+                    if isinstance(bindings, dict) and function_name in bindings:
+                        effective_allowed_tools = bindings[function_name]
+                overrides = getattr(ac, "function_loop_overrides", {})
+                if isinstance(overrides, dict) and function_name in overrides:
+                    override = overrides[function_name]
+                    if hasattr(override, "model_dump"):
+                        effective_loop_config = {k: v for k, v in override.model_dump().items() if v is not None}
+                    elif isinstance(override, dict):
+                        effective_loop_config = {k: v for k, v in override.items() if v is not None}
+
+        # AgentLoop branching: if the function has allowed_tools and we have a tool executor,
+        # delegate to the AgentLoop for multi-step reasoning
+        if effective_allowed_tools is not None and self._tool_executor is not None:
+            from sera.agent.agent_loop import AgentLoop, AgentLoopConfig
+
+            loop_cfg_dict = effective_loop_config or {}
+            loop_config = AgentLoopConfig(
+                max_steps=loop_cfg_dict.get("max_steps", 10),
+                tool_call_budget=loop_cfg_dict.get("tool_call_budget", 20),
+                timeout_sec=loop_cfg_dict.get("timeout_sec", 300.0),
+            )
+            loop = AgentLoop(
+                agent_llm=self,
+                tool_executor=self._tool_executor,
+                config=loop_config,
+            )
+            loop_result = await loop.run(
+                task_prompt=prompt,
+                purpose=purpose,
+                available_tools=effective_allowed_tools,
+                adapter_node_id=adapter_node_id,
+            )
+            self._last_loop_result = loop_result
+            if loop_result.final_output:
+                if func.handler is not None:
+                    return func.handler(loop_result.final_output)
+                if func.output_mode == OutputMode.JSON:
+                    return parse_json_response(loop_result.final_output)
+                return loop_result.final_output
+            return None
 
         last_error: Exception | None = None
         for attempt in range(func.max_retries):
@@ -279,9 +324,7 @@ class AgentLLM:
                     if func.output_mode == OutputMode.JSON and func.return_schema is not None:
                         schema_text = _json.dumps(func.return_schema, indent=2)
                         effective_prompt = (
-                            f"{prompt}\n\n"
-                            f"Output ONLY the JSON matching this schema:\n"
-                            f"```json\n{schema_text}\n```"
+                            f"{prompt}\n\nOutput ONLY the JSON matching this schema:\n```json\n{schema_text}\n```"
                         )
                     raw = await self.generate(
                         effective_prompt,
@@ -373,9 +416,7 @@ class AgentLLM:
 
             load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
 
-        base_model = AutoModelForCausalLM.from_pretrained(
-            model_id, revision=revision, **load_kwargs
-        )
+        base_model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, **load_kwargs)
         self._tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
 
         if need_value_head:
@@ -430,20 +471,14 @@ class AgentLLM:
         if self._mock_fn is not None:
             result = self._mock_fn(prompt, purpose)
             latency_ms = (time.monotonic() - start) * 1000
-            self._log_call(
-                prompt, result, purpose, adapter_node_id, temperature, latency_ms
-            )
+            self._log_call(prompt, result, purpose, adapter_node_id, temperature, latency_ms)
             return result
 
         temp = temperature or (
-            self._provider.temperature
-            if self._provider and hasattr(self._provider, "temperature")
-            else 0.7
+            self._provider.temperature if self._provider and hasattr(self._provider, "temperature") else 0.7
         )
         max_tok = max_tokens or (
-            self._provider.max_tokens
-            if self._provider and hasattr(self._provider, "max_tokens")
-            else 4096
+            self._provider.max_tokens if self._provider and hasattr(self._provider, "max_tokens") else 4096
         )
         model_id = ""
 
@@ -451,9 +486,7 @@ class AgentLLM:
             if self._inference_engine == "vllm":
                 if self._vllm_engine is None:
                     self._init_vllm_engine()
-                result = self._vllm_engine.generate(
-                    prompt, temp, max_tok, adapter_node_id, self.lineage_manager
-                )
+                result = self._vllm_engine.generate(prompt, temp, max_tok, adapter_node_id, self.lineage_manager)
             else:
                 self._init_local_model()
                 if adapter_node_id and adapter_node_id != self._current_adapter_id:
@@ -486,18 +519,12 @@ class AgentLLM:
                         do_sample=(temp > 0),
                         pad_token_id=pad_token_id,
                     )
-                result = self._tokenizer.decode(
-                    outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True
-                )
+                result = self._tokenizer.decode(outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True)
             model_id = self.model_spec.base_model.id
 
         elif self._provider_name == "openai":
             llm_cfg = self._provider
-            mid = (
-                llm_cfg.model_id
-                if hasattr(llm_cfg, "model_id") and llm_cfg.model_id != "same_as_base"
-                else "gpt-4o"
-            )
+            mid = llm_cfg.model_id if hasattr(llm_cfg, "model_id") and llm_cfg.model_id != "same_as_base" else "gpt-4o"
             resp = await self._client.chat.completions.create(
                 model=mid,
                 messages=[{"role": "user", "content": prompt}],
@@ -546,28 +573,45 @@ class AgentLLM:
         temperature: float | None,
         latency_ms: float,
         model_id: str = "mock",
+        phase: str | None = None,
+        tool_calls: list | None = None,
     ):
-        prompt_hash = (
-            f"sha256:{hashlib.sha256(prompt.encode()).hexdigest()[:16]}"
-        )
-        response_hash = (
-            f"sha256:{hashlib.sha256(response.encode()).hexdigest()[:16]}"
-        )
-        self.logger.log(
-            {
-                "event": "llm_call",
-                "call_id": str(uuid.uuid4()),
-                "purpose": purpose,
-                "model_id": model_id,
-                "adapter_node_id": adapter_node_id,
-                "prompt_tokens": len(prompt.split()),
-                "completion_tokens": len(response.split()),
-                "temperature": temperature,
-                "prompt_hash": prompt_hash,
-                "response_hash": response_hash,
-                "latency_ms": round(latency_ms, 1),
-            }
-        )
+        prompt_hash = f"sha256:{hashlib.sha256(prompt.encode()).hexdigest()}"
+        response_hash = f"sha256:{hashlib.sha256(response.encode()).hexdigest()}"
+        # Estimate tokens: use tokenizer if available, else rough char/4 estimate
+        if hasattr(self, "_tokenizer") and self._tokenizer is not None:
+            try:
+                prompt_tokens = len(self._tokenizer.encode(prompt))
+                completion_tokens = len(self._tokenizer.encode(response))
+            except Exception:
+                prompt_tokens = len(prompt) // 4
+                completion_tokens = len(response) // 4
+        else:
+            prompt_tokens = len(prompt) // 4
+            completion_tokens = len(response) // 4
+
+        entry: dict[str, Any] = {
+            "event": "llm_call",
+            "call_id": str(uuid.uuid4()),
+            "purpose": purpose,
+            "model_id": model_id,
+            "adapter_node_id": adapter_node_id,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "temperature": temperature,
+            "prompt_hash": prompt_hash,
+            "response_hash": response_hash,
+            "latency_ms": round(latency_ms, 1),
+        }
+        if phase is not None:
+            entry["phase"] = phase
+        if tool_calls:
+            entry["tool_calls"] = [
+                {"tool_name": tc.tool_name, "call_id": tc.call_id} if hasattr(tc, "tool_name") else str(tc)
+                for tc in tool_calls
+            ]
+
+        self.logger.log(entry)
 
     def load_adapter(self, adapter_node_id: str, lineage_manager=None):
         """Load LoRA adapter weights via peft's set_peft_model_state_dict.
@@ -751,11 +795,13 @@ class AgentLLM:
                         args = _json.loads(tc.function.arguments)
                     except _json.JSONDecodeError:
                         args = {"raw": tc.function.arguments}
-                    tool_calls.append(ToolCall(
-                        tool_name=tc.function.name,
-                        arguments=args,
-                        call_id=tc.id,
-                    ))
+                    tool_calls.append(
+                        ToolCall(
+                            tool_name=tc.function.name,
+                            arguments=args,
+                            call_id=tc.id,
+                        )
+                    )
 
         elif self._provider_name == "anthropic" and self._client is not None:
             # Anthropic tool calling
@@ -780,44 +826,261 @@ class AgentLLM:
                 if hasattr(block, "text"):
                     text_parts.append(block.text)
                 elif hasattr(block, "type") and block.type == "tool_use":
-                    tool_calls.append(ToolCall(
-                        tool_name=block.name,
-                        arguments=block.input if isinstance(block.input, dict) else {},
-                        call_id=block.id,
-                    ))
+                    tool_calls.append(
+                        ToolCall(
+                            tool_name=block.name,
+                            arguments=block.input if isinstance(block.input, dict) else {},
+                            call_id=block.id,
+                        )
+                    )
             result_text = "\n".join(text_parts)
             if not tool_calls:
                 tool_calls = None
 
         else:
-            # Local provider: use prompt-based tool calling
+            # Local provider: use native chat template tool calling when available
+            result_text = await self._generate_local_with_tools(
+                prompt,
+                available_tools,
+                purpose,
+                adapter_node_id,
+                temp,
+                max_tok,
+            )
+            # Parse tool calls from <tool_call> tags or JSON fallback
+            tool_calls, result_text = self._parse_local_tool_calls(result_text)
+
+        latency_ms = (time.monotonic() - start) * 1000
+        self._log_call(prompt, result_text, purpose, adapter_node_id, temperature, latency_ms)
+        return GenerationOutput(text=result_text, tool_calls=tool_calls, purpose=purpose)
+
+    async def _generate_local_with_tools(
+        self,
+        prompt: str,
+        available_tools: list[dict],
+        purpose: str,
+        adapter_node_id: str | None,
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Generate with tool calling via native chat template for local models.
+
+        Uses ``tokenizer.apply_chat_template(tools=...)`` when the tokenizer
+        supports it (e.g. Qwen2.5, Llama 3.1+).  Falls back to prompt-based
+        injection if the tokenizer doesn't support tools.
+        """
+        import json as _json
+        import torch
+
+        self._init_local_model()
+        if adapter_node_id and adapter_node_id != self._current_adapter_id:
+            self.load_adapter(adapter_node_id, lineage_manager=self.lineage_manager)
+
+        # Convert tool schemas to OpenAI function-calling format for chat template
+        tools_for_template = [{"type": "function", "function": t} for t in available_tools]
+
+        messages = [{"role": "user", "content": prompt}]
+
+        # Try native tool-calling chat template
+        use_native = self._tokenizer is not None and hasattr(self._tokenizer, "apply_chat_template")
+        if use_native:
+            try:
+                formatted = self._tokenizer.apply_chat_template(
+                    messages,
+                    tools=tools_for_template,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            except (TypeError, Exception):
+                # Tokenizer doesn't support tools= param; fall back
+                use_native = False
+
+        if not use_native:
+            # Fallback: inject tool descriptions into prompt text
             tool_desc = _json.dumps(available_tools, indent=2)
-            augmented_prompt = (
+            fallback_prompt = (
                 f"{prompt}\n\n"
                 f"Available tools:\n{tool_desc}\n\n"
                 "If you need to use a tool, output a JSON object with keys "
                 '"tool_name" and "arguments". Otherwise, respond normally.'
             )
-            result_text = await self.generate(
-                augmented_prompt, purpose=purpose,
-                adapter_node_id=adapter_node_id,
-                temperature=temperature, max_tokens=max_tokens,
+            if hasattr(self._tokenizer, "apply_chat_template"):
+                formatted = self._tokenizer.apply_chat_template(
+                    [{"role": "user", "content": fallback_prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            else:
+                formatted = self._format_prompt(fallback_prompt, purpose)
+
+        device = next(self._model.parameters()).device
+        inputs = self._tokenizer(formatted, return_tensors="pt").to(device)
+        pad_token_id = (
+            self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else self._tokenizer.eos_token_id
+        )
+
+        # Build stop token IDs for tool calling patterns
+        # This ensures generation stops after a tool call is emitted
+        stop_token_ids = []
+        for stop_text in ["</tool_call>", "</tool_calls>", "</call_function>"]:
+            ids = self._tokenizer.encode(stop_text, add_special_tokens=False)
+            if len(ids) == 1:
+                stop_token_ids.append(ids[0])
+
+        eos_ids = [self._tokenizer.eos_token_id] if self._tokenizer.eos_token_id else []
+        eos_ids.extend(stop_token_ids)
+
+        with torch.no_grad():
+            outputs = self._model.generate(
+                **inputs,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                do_sample=(temperature > 0),
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_ids if eos_ids else None,
             )
-            # Try to parse tool calls from response
+        result = self._tokenizer.decode(outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=False)
+
+        # Strip chat template special tokens but keep tool_call tags
+        import re as _re
+        result = _re.sub(r"<\|im_end\|>", "", result)
+        result = _re.sub(r"<\|im_start\|>\s*\w*\s*", "", result)
+        result = _re.sub(r"<\|endoftext\|>", "", result)
+        result = result.strip()
+
+        # Save raw output for debugging
+        import logging as _log
+        _debug_log = Path(str(self.logger.path).replace("agent_llm_log", "tool_gen_debug"))
+        try:
+            with open(_debug_log, "a") as _f:
+                _f.write(f"=== purpose={purpose} use_native={use_native} ===\n")
+                _f.write(f"OUTPUT:\n{result[:1500]}\n\n")
+        except Exception:
+            pass
+
+        return result
+
+    @staticmethod
+    def _parse_local_tool_calls(text: str) -> tuple[list["ToolCall"] | None, str]:
+        """Parse tool calls from local model output.
+
+        Supports multiple formats from Qwen2.5 and similar models:
+        1. ``<tool_call>{"name": ..., "arguments": ...}</tool_call>`` (singular)
+        2. ``<tool_calls>{"name": ..., "arguments": ...}</tool_calls>`` (plural)
+        3. Content wrapped in ```xml or ```json code blocks inside tags
+        4. Plain JSON ``{"tool_name": ..., "arguments": ...}``
+
+        Returns (tool_calls, remaining_text).
+        """
+        import json as _json
+        import re
+
+        tool_calls: list[ToolCall] = []
+
+        def _extract_json_objects(raw: str) -> list[dict]:
+            """Extract JSON objects from raw text, stripping code fences."""
+            # Strip ```xml, ```json, or ``` code fences
+            stripped = re.sub(r"```(?:xml|json|tool_call)?\s*", "", raw)
+            stripped = re.sub(r"```", "", stripped).strip()
+            objects = []
+            # Try parsing as a single JSON object
             try:
-                parsed = _json.loads(result_text)
-                if isinstance(parsed, dict) and "tool_name" in parsed:
-                    tool_calls = [ToolCall(
-                        tool_name=parsed["tool_name"],
-                        arguments=parsed.get("arguments", {}),
-                    )]
-                    result_text = ""
+                obj = _json.loads(stripped)
+                if isinstance(obj, dict):
+                    objects.append(obj)
+                elif isinstance(obj, list):
+                    objects.extend(o for o in obj if isinstance(o, dict))
+                return objects
             except _json.JSONDecodeError:
                 pass
+            # Try finding multiple JSON objects line by line
+            for line in stripped.splitlines():
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        objects.append(_json.loads(line))
+                    except _json.JSONDecodeError:
+                        pass
+            return objects
 
-        latency_ms = (time.monotonic() - start) * 1000
-        self._log_call(prompt, result_text, purpose, adapter_node_id, temperature, latency_ms)
-        return GenerationOutput(text=result_text, tool_calls=tool_calls, purpose=purpose)
+        def _obj_to_tool_call(obj: dict) -> ToolCall | None:
+            name = obj.get("name") or obj.get("tool_name", "")
+            args = obj.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = _json.loads(args)
+                except _json.JSONDecodeError:
+                    args = {"raw": args}
+            if name:
+                return ToolCall(tool_name=name, arguments=args)
+            return None
+
+        # 1) Parse <tool_call> or <tool_calls> tags (singular and plural)
+        tag_pattern = re.compile(r"<tool_calls?>\s*(.*?)\s*</tool_calls?>", re.DOTALL)
+        remaining = text
+        for m in tag_pattern.finditer(text):
+            for obj in _extract_json_objects(m.group(1)):
+                tc = _obj_to_tool_call(obj)
+                if tc is not None:
+                    tool_calls.append(tc)
+        if tool_calls:
+            remaining = tag_pattern.sub("", text).strip()
+            return tool_calls, remaining
+
+        # 1b) Parse <call_function> tags (alternative format some models use)
+        cf_pattern = re.compile(
+            r"<call_function>\s*"
+            r"<function_name>\s*(.*?)\s*</function_name>\s*"
+            r"<arguments>\s*(.*?)\s*</arguments>\s*"
+            r"</call_function>",
+            re.DOTALL,
+        )
+        for m in cf_pattern.finditer(text):
+            fname = m.group(1).strip()
+            args_str = m.group(2).strip()
+            try:
+                args = _json.loads(args_str)
+            except _json.JSONDecodeError:
+                args = {"raw": args_str}
+            if fname:
+                tool_calls.append(ToolCall(tool_name=fname, arguments=args if isinstance(args, dict) else {}))
+        if tool_calls:
+            # Only return the text before the first tool call (stop at hallucinated results)
+            first_match = cf_pattern.search(text)
+            remaining = text[: first_match.start()].strip() if first_match else text
+            return tool_calls, remaining
+
+        # 2) Parse JSON code blocks containing tool call objects/arrays
+        json_block_pattern = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+        for m in json_block_pattern.finditer(text):
+            for obj in _extract_json_objects(m.group(1)):
+                if "name" in obj or "tool_name" in obj:
+                    tc = _obj_to_tool_call(obj)
+                    if tc is not None:
+                        tool_calls.append(tc)
+        if tool_calls:
+            remaining = text[: json_block_pattern.search(text).start()].strip()
+            return tool_calls, remaining
+
+        # 3) Fallback: try plain JSON with "tool_name" or "name" key
+        try:
+            parsed = _json.loads(text)
+            if isinstance(parsed, dict) and ("tool_name" in parsed or "name" in parsed):
+                tc = _obj_to_tool_call(parsed)
+                if tc is not None:
+                    return [tc], ""
+            elif isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and ("name" in item or "tool_name" in item):
+                        tc = _obj_to_tool_call(item)
+                        if tc is not None:
+                            tool_calls.append(tc)
+                if tool_calls:
+                    return tool_calls, ""
+        except _json.JSONDecodeError:
+            pass
+
+        return None, text
 
     def get_turn_log_probs(
         self,
@@ -861,7 +1124,7 @@ class AgentLLM:
                 outputs = self._model(input_ids=inputs.input_ids)
                 logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
 
-            shift_logits = logits[:, context_len - 1: -1, :]
+            shift_logits = logits[:, context_len - 1 : -1, :]
             shift_labels = inputs.input_ids[:, context_len:]
             token_log_probs = selective_log_softmax(shift_logits, shift_labels)
             result[phase] = token_log_probs.sum().item()

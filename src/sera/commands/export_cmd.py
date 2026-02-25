@@ -117,11 +117,34 @@ def run_export_best(work_dir: str) -> None:
     with open(output_dir / "report.json", "w") as f:
         json.dump(report, f, default=str, indent=2)
 
-    # Copy adapter if available
+    # Export adapter if available
     lineage_dir = workspace / "lineage" / "nodes"
-    if lineage_dir.exists():
-        # Find adapter for best node from search log
-        # For now, just note adapter location
-        pass
+    if lineage_dir.exists() and best_node_id:
+        # Find adapter_node_id from the search state checkpoint
+        adapter_node_id = None
+        checkpoint_dir = workspace / "checkpoints"
+        if checkpoint_dir.exists():
+            from sera.utils.checkpoint import load_latest_checkpoint
+
+            state = load_latest_checkpoint(checkpoint_dir)
+            if state:
+                node_data = state.get("all_nodes", {}).get(best_node_id, {})
+                adapter_node_id = node_data.get("adapter_node_id")
+
+        if adapter_node_id and (lineage_dir / adapter_node_id).exists():
+            try:
+                from sera.lineage.lineage_manager import LineageManager
+
+                lm = LineageManager(lineage_dir=workspace / "lineage")
+                full_weights = lm.materialize(adapter_node_id)
+                if full_weights:
+                    from safetensors.torch import save_file
+
+                    adapter_out = output_dir / "adapter.safetensors"
+                    clean = {k: v.contiguous().cpu() for k, v in full_weights.items()}
+                    save_file(clean, str(adapter_out))
+                    console.print(f"  Adapter exported: {adapter_out}")
+            except Exception as e:
+                console.print(f"  [yellow]Adapter export failed: {e}[/yellow]")
 
     console.print(f"[green]Best artifacts exported to {output_dir}[/green]")

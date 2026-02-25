@@ -1,0 +1,173 @@
+prompts:
+  paper_evaluation:
+    description: "Expert paper review evaluation"
+    template: |-
+      You are an expert reviewer for a top-tier {venue} conference. You have been asked to evaluate the following research paper.
+
+      ## Paper to Review
+      {paper_text}
+
+      ## Evaluation Criteria
+      {criteria_json}
+
+      ## Few-Shot Examples
+      {few_shot_reviews}
+
+      ## Reviewer Instructions
+      Evaluate this paper as if reviewing for {venue}. For each criterion, provide:
+      1. A score from 1 to {max_score}.
+      2. A detailed justification (2-4 sentences) referencing specific parts of the paper.
+
+      Also provide:
+      - An overall score (1 to {max_score}).
+      - A summary of strengths (3-5 bullet points).
+      - A summary of weaknesses (3-5 bullet points).
+      - Questions for the authors (1-3 questions).
+      - A confidence score (1-5, where 5 = very confident).
+
+      Return as JSON:
+      {{
+        "criterion_scores": [
+          {{
+            "criterion": "<name>",
+            "score": <int>,
+            "justification": "<detailed justification>"
+          }}
+        ],
+        "overall_score": <int>,
+        "strengths": ["<strength1>", "<strength2>"],
+        "weaknesses": ["<weakness1>", "<weakness2>"],
+        "questions_for_authors": ["<question1>"],
+        "confidence": <int>,
+        "detailed_comments": "<free-form detailed review comments>"
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  reviewer_reflection:
+    description: "Reflect on and improve review quality"
+    template: |-
+      You are reflecting on your own review of a research paper to improve its quality and fairness.
+
+      ## Your Previous Review
+      {previous_review_json}
+
+      ## Paper Under Review
+      {paper_text}
+
+      ## Reflection Round
+      This is reflection round {reflection_round} of {max_reflections}.
+
+      ## Instructions
+      Critically examine your previous review for:
+      1. Bias: Are you being unfairly harsh or lenient? Are there implicit biases?
+      2. Consistency: Do your scores align with your justifications?
+      3. Completeness: Did you miss any important strengths or weaknesses?
+      4. Constructiveness: Are your criticisms actionable?
+      5. Accuracy: Did you misunderstand any part of the paper?
+
+      If you find issues with your previous review, provide a revised review. If your review was fair and accurate, you may keep the scores but must still reflect.
+
+      Return as JSON:
+      {{
+        "reflection_notes": "<what you reconsidered>",
+        "changes_made": ["<change1>", "<change2>"],
+        "revised_criterion_scores": [
+          {{
+            "criterion": "<name>",
+            "score": <int>,
+            "justification": "<revised justification>"
+          }}
+        ],
+        "revised_overall_score": <int>,
+        "revised_strengths": ["<strength1>"],
+        "revised_weaknesses": ["<weakness1>"],
+        "revised_confidence": <int>
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  meta_review:
+    description: "Synthesize multiple reviews into meta-review"
+    template: |-
+      You are an Area Chair synthesizing multiple reviews into a meta-review.
+
+      ## Paper Title
+      {paper_title}
+
+      ## Individual Reviews
+      {reviews_json}
+
+      ## Evaluation Criteria
+      {criteria_json}
+
+      ## Instructions
+      As Area Chair, synthesize the individual reviews into a meta-review. You should:
+      1. Identify consensus points (where reviewers agree).
+      2. Identify disagreements and adjudicate them.
+      3. Weigh reviewer confidence in your assessment.
+      4. Provide a final recommendation.
+
+      Return as JSON:
+      {{
+        "consensus_strengths": ["<strength where reviewers agree>"],
+        "consensus_weaknesses": ["<weakness where reviewers agree>"],
+        "disagreements": [
+          {{
+            "topic": "<what reviewers disagree on>",
+            "positions": ["<reviewer 1 view>", "<reviewer 2 view>"],
+            "adjudication": "<your resolution>"
+          }}
+        ],
+        "meta_score": <float>,
+        "recommendation": "<accept|revise|reject>",
+        "key_revision_requirements": ["<requirement1>", "<requirement2>"],
+        "meta_review_text": "<narrative meta-review summary>"
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  paper_revision:
+    description: "Revise paper based on reviewer feedback"
+    template: |-
+      You are a researcher revising your paper based on reviewer feedback.
+
+      ## Current Paper
+      {paper_text}
+
+      ## Meta-Review
+      {meta_review_json}
+
+      ## Individual Reviews
+      {reviews_json}
+
+      ## Revision Round
+      This is revision round {revision_round} of {max_revisions}.
+
+      ## Instructions
+      Revise the paper to address the reviewers' concerns. For each criticism:
+      1. Decide whether to accept, partially accept, or rebut.
+      2. If accepting, make the specific change in the paper text.
+      3. Prepare a response explaining what you changed and why.
+
+      Focus on:
+      - Addressing all "key_revision_requirements" from the meta-review.
+      - Fixing any factual errors or unclear passages identified by reviewers.
+      - Strengthening weak sections while preserving strong ones.
+      - NOT introducing new experiments or claims beyond what the data supports.
+
+      Return as JSON:
+      {{
+        "revision_log": [
+          {{
+            "criticism": "<the reviewer criticism>",
+            "response_type": "<accept|partial_accept|rebut>",
+            "response": "<what you did and why>",
+            "sections_modified": ["<section1>"]
+          }}
+        ],
+        "revised_paper": "<the full revised LaTeX paper body>",
+        "author_response": "<formal response letter to reviewers>"
+      }}
+
+      Output ONLY the JSON, no other text.

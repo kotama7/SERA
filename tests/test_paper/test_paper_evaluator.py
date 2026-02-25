@@ -16,6 +16,7 @@ from sera.paper.paper_evaluator import PaperEvaluator, PaperScoreResult
 # Mock spec objects
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MockCriterion:
     name: str = "Novelty"
@@ -38,11 +39,13 @@ class MockEnsembleConfig:
 class MockPaperScoreSpec:
     evaluator: str = "llm_as_judge"
     max_score: int = 10
-    criteria: list = field(default_factory=lambda: [
-        MockCriterion(name="Novelty", description="Novelty"),
-        MockCriterion(name="Soundness", description="Soundness"),
-        MockCriterion(name="Clarity", description="Clarity"),
-    ])
+    criteria: list = field(
+        default_factory=lambda: [
+            MockCriterion(name="Novelty", description="Novelty"),
+            MockCriterion(name="Soundness", description="Soundness"),
+            MockCriterion(name="Clarity", description="Clarity"),
+        ]
+    )
     passing_score: float = 6.0
     ensemble: MockEnsembleConfig = field(default_factory=MockEnsembleConfig)
     few_shot_reviews: list = field(default_factory=list)
@@ -51,6 +54,7 @@ class MockPaperScoreSpec:
 # ---------------------------------------------------------------------------
 # Fake LLM that returns structured reviews
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_llm(review_template: str | None = None):
     """Create a mock AgentLLM that returns structured review text."""
@@ -94,6 +98,7 @@ def _make_mock_llm(review_template: str | None = None):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestPaperScoreResult:
     """Test PaperScoreResult dataclass."""

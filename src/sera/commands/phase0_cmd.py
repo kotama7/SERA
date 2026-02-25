@@ -1,4 +1,5 @@
 """sera phase0-related-work command implementation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,7 @@ def run_phase0(
         input1_data = yaml.safe_load(f)
 
     from sera.specs.input1 import Input1Model
+
     input1 = Input1Model(**input1_data)
 
     # Build API clients based on priority
@@ -41,21 +43,52 @@ def run_phase0(
     from sera.phase0.api_clients.arxiv import ArxivClient
     from sera.phase0.api_clients.web_search import WebSearchClient
 
+    # Try loading ResourceSpec for API key env var names
+    resource_api_keys: dict[str, str] = {}
+    resource_spec_path = specs_dir / "resource_spec.yaml"
+    if resource_spec_path.exists():
+        try:
+            from sera.specs.resource_spec import ResourceSpecModel
+
+            with open(resource_spec_path) as f:
+                res_data = yaml.safe_load(f) or {}
+            res_spec = ResourceSpecModel.model_validate(res_data.get("resource_spec", res_data))
+            resource_api_keys = getattr(res_spec, "api_keys", {}) or {}
+        except Exception:
+            pass
+
+    def _get_api_key(env_default: str, resource_key: str | None = None) -> str | None:
+        """Resolve API key: ResourceSpec env var name → direct env var."""
+        if resource_key and resource_key in resource_api_keys:
+            env_name = resource_api_keys[resource_key]
+            val = os.environ.get(env_name)
+            if val:
+                return val
+        return os.environ.get(env_default)
+
     priority_list = [s.strip() for s in api_priority.split(",")]
     clients = []
+    client_errors: list[str] = []
     for name in priority_list:
-        if name == "semantic_scholar":
-            api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-            clients.append(SemanticScholarClient(api_key=api_key))
-        elif name == "crossref":
-            email = os.environ.get("CROSSREF_EMAIL")
-            clients.append(CrossRefClient(email=email))
-        elif name == "arxiv":
-            clients.append(ArxivClient())
-        elif name == "web":
-            serpapi_key = os.environ.get("SERPAPI_API_KEY")
-            if serpapi_key:
-                clients.append(WebSearchClient(api_key=serpapi_key))
+        try:
+            if name == "semantic_scholar":
+                api_key = _get_api_key("SEMANTIC_SCHOLAR_API_KEY", "semantic_scholar")
+                clients.append(SemanticScholarClient(api_key=api_key))
+            elif name == "crossref":
+                email = _get_api_key("CROSSREF_EMAIL", "crossref")
+                clients.append(CrossRefClient(email=email))
+            elif name == "arxiv":
+                clients.append(ArxivClient())
+            elif name == "web":
+                serpapi_key = _get_api_key("SERPAPI_API_KEY", "web_search")
+                if serpapi_key:
+                    clients.append(WebSearchClient(api_key=serpapi_key))
+        except Exception as e:
+            client_errors.append(f"{name}: {e}")
+
+    if not clients:
+        console.print(f"[red]All API clients failed to initialize: {client_errors}[/red]")
+        raise SystemExit(10)
 
     # Initialize AgentLLM -- prefer OpenAI if API key is available
     from sera.specs.model_spec import ModelSpecModel, AgentLLMConfig
@@ -107,37 +140,62 @@ def run_phase0(
     with open(specs_dir / "related_work_spec.yaml", "w") as f:
         yaml.dump(
             {"related_work_spec": _to_dict(output.related_work_spec)},
-            f, default_flow_style=False, allow_unicode=True,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
         )
 
     # paper_spec.yaml -- PaperSpecModel defaults (Phase 0 doesn't customise this)
     from sera.specs.paper_spec import PaperSpecModel
+
     with open(specs_dir / "paper_spec.yaml", "w") as f:
         yaml.dump(
             {"paper_spec": PaperSpecModel().model_dump()},
-            f, default_flow_style=False, allow_unicode=True,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
         )
 
     # paper_score_spec.yaml -- PaperScoreSpecModel defaults
     from sera.specs.paper_score_spec import PaperScoreSpecModel
+
     with open(specs_dir / "paper_score_spec.yaml", "w") as f:
         yaml.dump(
             {"paper_score_spec": PaperScoreSpecModel().model_dump()},
-            f, default_flow_style=False, allow_unicode=True,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
         )
 
     # teacher_paper_set.yaml
     teacher_data = _to_dict(output.teacher_paper_set)
     # Remap Phase0 TeacherPaperSet.papers to TeacherPaperSetModel.teacher_papers
     if "papers" in teacher_data and "teacher_papers" not in teacher_data:
-        teacher_data["teacher_papers"] = [
-            {"paper_id": p.get("paper_id", ""), "title": p.get("title", "")}
-            for p in teacher_data.pop("papers")
-        ]
+        papers_list = teacher_data.pop("papers")
+        metadata_list = teacher_data.pop("teacher_paper_metadata", [])
+        # Build a lookup from paper_id -> metadata
+        meta_by_id = {m.get("paper_id", ""): m for m in metadata_list}
+        teacher_papers = []
+        for p in papers_list:
+            pid = p.get("paper_id", "")
+            meta = meta_by_id.get(pid, {})
+            teacher_papers.append({
+                "paper_id": pid,
+                "title": p.get("title", ""),
+                "role": meta.get("role", "structure_reference"),
+                "sections": meta.get("sections", []),
+                "figure_count": meta.get("figure_count", 0),
+                "table_count": meta.get("table_count", 0),
+                "experiment_style": meta.get("experiment_style", ""),
+                "stats_format": meta.get("stats_format", ""),
+            })
+        teacher_data["teacher_papers"] = teacher_papers
     with open(specs_dir / "teacher_paper_set.yaml", "w") as f:
         yaml.dump(
             {"teacher_paper_set": teacher_data},
-            f, default_flow_style=False, allow_unicode=True,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
         )
 
     console.print(f"[green]Phase 0 complete. Specs saved to {specs_dir}[/green]")

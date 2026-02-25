@@ -1,4 +1,5 @@
 """Phase 1: Spec freezing with SHA-256 integrity verification."""
+
 from __future__ import annotations
 
 import logging
@@ -53,6 +54,7 @@ class SpecFreezer:
             if bm is not None and not getattr(bm, "revision", None):
                 try:
                     from transformers import AutoConfig
+
                     config = AutoConfig.from_pretrained(bm.id)
                     bm.revision = getattr(config, "_commit_hash", "unknown")
                 except Exception:
@@ -118,9 +120,19 @@ class SpecFreezer:
         phase_tool_map = getattr(tools_cfg, "phase_tool_map", {})
 
         # Build function→phase mapping
+        # Map function category names to actual phase_tool_map keys
+        _CATEGORY_TO_PHASE = {
+            "search": "phase2",
+            "execution": "phase3",
+            "spec": "phase1",
+            "paper": "phase7",
+            "evaluation": "phase8",
+            "phase0": "phase0",
+        }
         func_to_phase: dict[str, str] = {}
         available_functions = getattr(funcs_cfg, "available_functions", {})
-        for phase, func_list in available_functions.items():
+        for category, func_list in available_functions.items():
+            phase = _CATEGORY_TO_PHASE.get(category, category)
             for fn in func_list:
                 func_to_phase[fn] = phase
 
@@ -131,9 +143,9 @@ class SpecFreezer:
             for tool in bound_tools:
                 if tool not in all_tools:
                     logger.warning(
-                        "agent_commands validation: function '%s' binds tool '%s' "
-                        "which is not in available_tools",
-                        func_name, tool,
+                        "agent_commands validation: function '%s' binds tool '%s' which is not in available_tools",
+                        func_name,
+                        tool,
                     )
 
             # Check 2: bound tools are subset of phase_tool_map for function's phase
@@ -145,8 +157,30 @@ class SpecFreezer:
                         logger.warning(
                             "agent_commands validation: function '%s' (phase=%s) binds "
                             "tool '%s' which is not in phase_tool_map[%s]",
-                            func_name, phase, tool, phase,
+                            func_name,
+                            phase,
+                            tool,
+                            phase,
                         )
+
+        # Check 3: available_functions are registered in AgentFunctionRegistry
+        try:
+            import sera.agent.functions  # noqa: F401  — trigger registration
+            from sera.agent.agent_functions import REGISTRY
+
+            for phase, func_list in available_functions.items():
+                for fn in func_list:
+                    try:
+                        REGISTRY.get(fn)
+                    except KeyError:
+                        logger.warning(
+                            "agent_commands validation: function '%s' (phase=%s) is not "
+                            "registered in AgentFunctionRegistry",
+                            fn,
+                            phase,
+                        )
+        except ImportError:
+            logger.debug("Could not import agent functions for validation")
 
         logger.info("agent_commands validation completed")
 

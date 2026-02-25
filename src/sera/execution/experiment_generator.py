@@ -14,35 +14,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-EXPERIMENT_CODE_PROMPT = """Generate a complete {language_name} experiment script for the following:
+from sera.prompts import get_prompt
 
-Problem: {problem_description}
-Objective: {objective} ({direction})
-Hypothesis: {hypothesis}
-
-Experiment configuration:
-{experiment_config}
-
-Data location: {data_location}
-
-{template_section}
-
-Requirements:
-1. The script must accept a seed argument via {seed_arg_description}
-2. Set random seeds for reproducibility
-3. Implement the experiment based on the hypothesis and config
-4. Output results as JSON to "metrics.json" in the current directory
-5. The metrics.json MUST follow this schema:
-   {{"primary": {{"name": "{metric_name}", "value": <float>, "higher_is_better": {higher_is_better}}},
-    "constraints": [...], "secondary": [...], "raw": {{}},
-    "seed": <seed>, "wall_time_sec": <float>,
-    "{metric_name}": <float>}}
-6. Handle errors gracefully and print informative messages to stderr
-
-Write ONLY the {language_name} code, no explanations:
-```{code_block_tag}
-# experiment code here
-```"""
+EXPERIMENT_CODE_PROMPT = get_prompt("experiment_code_runtime")
 
 
 class ExperimentGenerator:

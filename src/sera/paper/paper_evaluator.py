@@ -103,16 +103,12 @@ class PaperEvaluator:
             individual_reviews.append(review)
 
         # -- Step 2: Ensemble aggregation ------------------------------
-        result = self._aggregate_reviews(
-            individual_reviews, criteria, max_score, passing_score
-        )
+        result = self._aggregate_reviews(individual_reviews, criteria, max_score, passing_score)
         result.individual_reviews = individual_reviews
 
         # Meta-review
         if do_meta_review and len(individual_reviews) > 1:
-            result.meta_review = await self._generate_meta_review(
-                paper_md, individual_reviews, agent_llm
-            )
+            result.meta_review = await self._generate_meta_review(paper_md, individual_reviews, agent_llm)
 
         return result
 
@@ -159,7 +155,7 @@ class PaperEvaluator:
         if few_shot_reviews:
             fs_text = "\n\nHere are example reviews for reference:\n"
             for i, example in enumerate(few_shot_reviews):
-                fs_text += f"\nExample {i+1}:\n{json.dumps(example, default=str)}\n"
+                fs_text += f"\nExample {i + 1}:\n{json.dumps(example, default=str)}\n"
 
         # Full evaluation prompt
         eval_prompt = (
@@ -215,9 +211,7 @@ class PaperEvaluator:
     # Review parsing
     # ------------------------------------------------------------------
 
-    def _parse_review(
-        self, review_text: str, criteria: list[Any], max_score: int
-    ) -> dict:
+    def _parse_review(self, review_text: str, criteria: list[Any], max_score: int) -> dict:
         """Parse a structured review into a dict."""
         review: dict[str, Any] = {
             "summary": "",
@@ -245,65 +239,62 @@ class PaperEvaluator:
             # Detect section headers
             upper = stripped.upper()
             if upper.startswith("SUMMARY:"):
-                review["summary"] = stripped[len("SUMMARY:"):].strip()
+                review["summary"] = stripped[len("SUMMARY:") :].strip()
                 current_section = None
             elif upper.startswith("STRENGTHS:"):
                 current_section = "strengths"
-                rest = stripped[len("STRENGTHS:"):].strip()
+                rest = stripped[len("STRENGTHS:") :].strip()
                 if rest:
                     review["strengths"].append(rest)
             elif upper.startswith("WEAKNESSES:"):
                 current_section = "weaknesses"
-                rest = stripped[len("WEAKNESSES:"):].strip()
+                rest = stripped[len("WEAKNESSES:") :].strip()
                 if rest:
                     review["weaknesses"].append(rest)
             elif upper.startswith("QUESTIONS:"):
                 current_section = "questions"
-                rest = stripped[len("QUESTIONS:"):].strip()
+                rest = stripped[len("QUESTIONS:") :].strip()
                 if rest:
                     review["questions"].append(rest)
             elif upper.startswith("LIMITATIONS:"):
                 current_section = "limitations"
-                rest = stripped[len("LIMITATIONS:"):].strip()
+                rest = stripped[len("LIMITATIONS:") :].strip()
                 if rest:
                     review["limitations"].append(rest)
             elif upper.startswith("MISSING:"):
                 current_section = "missing"
-                rest = stripped[len("MISSING:"):].strip()
+                rest = stripped[len("MISSING:") :].strip()
                 if rest:
                     review["missing"].append(rest)
             elif upper.startswith("IMPROVEMENTS:"):
                 current_section = "improvements"
-                rest = stripped[len("IMPROVEMENTS:"):].strip()
+                rest = stripped[len("IMPROVEMENTS:") :].strip()
                 if rest:
                     review["improvements"].append(rest)
             elif upper.startswith("SCORES:"):
                 current_section = "scores"
             elif upper.startswith("OVERALL:"):
                 try:
-                    score_str = re.search(r"[\d.]+", stripped[len("OVERALL:"):])
+                    score_str = re.search(r"[\d.]+", stripped[len("OVERALL:") :])
                     if score_str:
-                        review["overall_score"] = min(
-                            float(score_str.group()), max_score
-                        )
+                        review["overall_score"] = min(float(score_str.group()), max_score)
                 except (ValueError, AttributeError):
                     pass
                 current_section = None
             elif upper.startswith("CONFIDENCE:"):
                 try:
-                    conf_str = re.search(r"[\d.]+", stripped[len("CONFIDENCE:"):])
+                    conf_str = re.search(r"[\d.]+", stripped[len("CONFIDENCE:") :])
                     if conf_str:
                         review["confidence"] = min(float(conf_str.group()), 1.0)
                 except (ValueError, AttributeError):
                     pass
                 current_section = None
             elif upper.startswith("DECISION:"):
-                decision = stripped[len("DECISION:"):].strip().lower()
+                decision = stripped[len("DECISION:") :].strip().lower()
                 if decision in ("accept", "revise", "reject"):
                     review["decision"] = decision
                 current_section = None
-            elif current_section in ("strengths", "weaknesses", "questions",
-                                      "limitations", "missing", "improvements"):
+            elif current_section in ("strengths", "weaknesses", "questions", "limitations", "missing", "improvements"):
                 # List item
                 item = stripped.lstrip("- *").strip()
                 if item:
@@ -344,18 +335,12 @@ class PaperEvaluator:
             all_criterion_names.update(r.get("scores", {}).keys())
 
         for crit_name in all_criterion_names:
-            scores = [
-                r["scores"][crit_name]
-                for r in reviews
-                if crit_name in r.get("scores", {})
-            ]
+            scores = [r["scores"][crit_name] for r in reviews if crit_name in r.get("scores", {})]
             if scores:
                 result.scores[crit_name] = sum(scores) / len(scores)
 
         # Overall score: average of individual overall scores
-        overall_scores = [
-            r["overall_score"] for r in reviews if r.get("overall_score", 0) > 0
-        ]
+        overall_scores = [r["overall_score"] for r in reviews if r.get("overall_score", 0) > 0]
         if overall_scores:
             result.overall_score = sum(overall_scores) / len(overall_scores)
         elif result.scores:
@@ -363,19 +348,14 @@ class PaperEvaluator:
             result.overall_score = sum(result.scores.values()) / len(result.scores)
 
         # Confidence: average
-        confidences = [
-            r["confidence"] for r in reviews if r.get("confidence", 0) > 0
-        ]
-        result.confidence = (
-            sum(confidences) / len(confidences) if confidences else 0.5
-        )
+        confidences = [r["confidence"] for r in reviews if r.get("confidence", 0) > 0]
+        result.confidence = sum(confidences) / len(confidences) if confidences else 0.5
 
         # Merge text fields
         summaries = [r["summary"] for r in reviews if r.get("summary")]
         result.summary = " | ".join(summaries) if summaries else ""
 
-        for key in ("strengths", "weaknesses", "questions", "limitations",
-                     "missing", "improvements"):
+        for key in ("strengths", "weaknesses", "questions", "limitations", "missing", "improvements"):
             merged: list[str] = []
             for r in reviews:
                 items = r.get(key, [])
@@ -393,6 +373,7 @@ class PaperEvaluator:
         decisions = [r["decision"] for r in reviews if r.get("decision")]
         if decisions:
             from collections import Counter
+
             decision_counts = Counter(decisions)
             result.decision = decision_counts.most_common(1)[0][0]
         else:
@@ -416,7 +397,7 @@ class PaperEvaluator:
         """Generate an Area-Chair-style meta-review."""
         reviews_text = ""
         for i, r in enumerate(reviews):
-            reviews_text += f"\n--- Reviewer {i+1} ---\n"
+            reviews_text += f"\n--- Reviewer {i + 1} ---\n"
             reviews_text += f"Summary: {r.get('summary', '')}\n"
             reviews_text += f"Overall: {r.get('overall_score', '?')}\n"
             reviews_text += f"Decision: {r.get('decision', '?')}\n"
@@ -435,6 +416,4 @@ class PaperEvaluator:
             "4. Provides specific improvement instructions if applicable"
         )
 
-        return await agent_llm.generate(
-            prompt=meta_prompt, purpose="meta_review"
-        )
+        return await agent_llm.generate(prompt=meta_prompt, purpose="meta_review")

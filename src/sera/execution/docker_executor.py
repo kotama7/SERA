@@ -74,10 +74,7 @@ class DockerExecutor(Executor):
         gpu_enabled: bool = True,
     ):
         if not _DOCKER_AVAILABLE:
-            raise ImportError(
-                "DockerExecutor requires the 'docker' Python SDK. "
-                "Install it with: pip install docker"
-            )
+            raise ImportError("DockerExecutor requires the 'docker' Python SDK. Install it with: pip install docker")
 
         self.work_dir = Path(work_dir)
         self.docker_config = docker_config
@@ -184,6 +181,7 @@ class DockerExecutor(Executor):
             script_in_run_dir = run_dir / container_script_name
             if script_path != script_in_run_dir:
                 import shutil
+
                 shutil.copy2(script_path, script_in_run_dir)
 
             # Add any extra volumes from docker config
@@ -211,9 +209,7 @@ class DockerExecutor(Executor):
             if self.gpu_enabled and self.gpu_runtime:
                 if self.gpu_runtime == "nvidia":
                     # Use device_requests for modern Docker GPU support
-                    container_kwargs["device_requests"] = [
-                        DeviceRequest(count=-1, capabilities=[["gpu"]])
-                    ]
+                    container_kwargs["device_requests"] = [DeviceRequest(count=-1, capabilities=[["gpu"]])]
                 else:
                     # Fallback to runtime parameter for other GPU runtimes
                     container_kwargs["runtime"] = self.gpu_runtime
@@ -311,9 +307,7 @@ class DockerExecutor(Executor):
             try:
                 client.images.pull(image)
             except Exception as pull_exc:
-                raise RuntimeError(
-                    f"Failed to pull Docker image '{image}': {pull_exc}"
-                ) from pull_exc
+                raise RuntimeError(f"Failed to pull Docker image '{image}': {pull_exc}") from pull_exc
 
     @staticmethod
     def _capture_logs(container: Any, stdout_path: Path, stderr_path: Path) -> None:

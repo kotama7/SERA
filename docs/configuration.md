@@ -304,7 +304,7 @@ SERA は API キーの値ではなく、**環境変数名**を `ResourceSpec.api
 
 | パラメータ | 型 | デフォルト | 説明 |
 |---|---|---|---|
-| `method` | `Literal["outcome_rm", "mt_grpo", "hiper"]` | `"outcome_rm"` | 報酬計算手法。`compute_reward()` がこの値でディスパッチする |
+| `method` | `Literal["outcome_rm", "mt_grpo", "tool_aware", "hiper"]` | `"outcome_rm"` | 報酬計算手法。`compute_reward()` がこの値でディスパッチする |
 | `constraint_penalty` | `float` | `10.0` | 制約違反 1 件あたりのペナルティ |
 | `kl_coef_in_reward` | `float` | `0.01` | KL ダイバージェンスの報酬ペナルティ係数 |
 
@@ -314,6 +314,7 @@ SERA は API キーの値ではなく、**環境変数名**を `ResourceSpec.api
 |------|------|
 | `outcome_rm` | 従来の報酬計算（primary_value - penalties）。デフォルト |
 | `mt_grpo` | Multi-Turn GRPO。ターンレベル報酬の重み付き和（`turn_rewards` が必要） |
+| `tool_aware` | Tool-Aware 報酬。`mt_grpo` をベースに、ツール使用効率のボーナスと失敗ペナルティを加算（`R_adj = R_base + efficiency_bonus - failure_penalty`） |
 | `hiper` | HiPER 階層的報酬。報酬値は `mt_grpo` と同一だが、Advantage 分解が 3 層階層的になる |
 
 ### TurnRewardSpec（ターンレベル報酬設定）

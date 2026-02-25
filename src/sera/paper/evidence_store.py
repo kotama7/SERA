@@ -43,20 +43,12 @@ class EvidenceStore:
             reverse=True,
         )
         for node in sorted_nodes:
-            se_str = (
-                f"{node.se:.4f}"
-                if node.se is not None and node.se != float("inf")
-                else "N/A"
-            )
+            se_str = f"{node.se:.4f}" if node.se is not None and node.se != float("inf") else "N/A"
             mu_str = f"{node.mu:.4f}" if node.mu is not None else "N/A"
             lcb_str = f"{node.lcb:.4f}" if node.lcb is not None else "N/A"
-            method = node.experiment_config.get(
-                "method", node.hypothesis[:50]
-            )
+            method = node.experiment_config.get("method", node.hypothesis[:50])
             feasible_str = "Yes" if node.feasible else "No"
-            lines.append(
-                f"| {method} | {mu_str} \u00b1 {se_str} | {lcb_str} | {feasible_str} |"
-            )
+            lines.append(f"| {method} | {mu_str} \u00b1 {se_str} | {lcb_str} | {feasible_str} |")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
@@ -80,11 +72,7 @@ class EvidenceStore:
 
         for node in self.all_evaluated_nodes:
             if node.branching_op == "improve" and node.parent_id == best_id:
-                diff = {
-                    k: v
-                    for k, v in node.experiment_config.items()
-                    if self.best_node.experiment_config.get(k) != v
-                }
+                diff = {k: v for k, v in node.experiment_config.items() if self.best_node.experiment_config.get(k) != v}
                 if diff:
                     key = list(diff.keys())[0]
                     ablations[key] = {
@@ -177,9 +165,5 @@ class EvidenceStore:
             "search_log_len": len(self.search_log),
             "eval_log_len": len(self.eval_log),
             "ppo_log_len": len(self.ppo_log),
-            "best_node_id": (
-                getattr(self.best_node, "node_id", None)
-                if self.best_node
-                else None
-            ),
+            "best_node_id": (getattr(self.best_node, "node_id", None) if self.best_node else None),
         }

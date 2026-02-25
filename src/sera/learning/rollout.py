@@ -17,13 +17,13 @@ class PPORollout:
     """
 
     node_id: str
-    prompt: str               # LLM input (hypothesis generation prompt)
-    response: str             # LLM output (hypothesis + experiment design JSON)
-    log_prob: float           # Log probability of output token sequence
-    reward: float             # Computed reward
-    value: float              # Value function estimate
-    advantage: float = 0.0    # GAE-computed advantage (filled later)
-    returns: float = 0.0      # Discounted returns (filled later)
+    prompt: str  # LLM input (hypothesis generation prompt)
+    response: str  # LLM output (hypothesis + experiment design JSON)
+    log_prob: float  # Log probability of output token sequence
+    reward: float  # Computed reward
+    value: float  # Value function estimate
+    advantage: float = 0.0  # GAE-computed advantage (filled later)
+    returns: float = 0.0  # Discounted returns (filled later)
 
 
 @dataclass
@@ -35,3 +35,16 @@ class PPORolloutV2(PPORollout):
     """
 
     turn_rewards: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class PPORolloutV3(PPORolloutV2):
+    """Extended rollout with tool usage trajectory for tool-aware rewards.
+
+    Inherits all fields from :class:`PPORolloutV2` and adds a list of
+    :class:`~sera.learning.tool_usage_learning.ToolCallRecord` capturing
+    each tool invocation during the node's lifetime.  Used by the
+    ``tool_aware`` reward method.
+    """
+
+    tool_trajectory: list = field(default_factory=list)

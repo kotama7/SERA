@@ -14,6 +14,7 @@ from sera.paper.figure_generator import FigureGenerator
 @dataclass
 class MockNode:
     """Minimal mock of SearchNode for figure generation."""
+
     node_id: str = "node-1"
     parent_id: str | None = None
     hypothesis: str = "Test hypothesis"
@@ -34,12 +35,9 @@ class TestCIBarChart:
     def test_basic_bar_chart(self, tmp_path):
         gen = FigureGenerator(tmp_path / "figs")
         nodes = [
-            MockNode(node_id="n1", mu=0.90, se=0.01, lcb=0.88,
-                     experiment_config={"method": "Method A"}),
-            MockNode(node_id="n2", mu=0.85, se=0.02, lcb=0.81,
-                     experiment_config={"method": "Method B"}),
-            MockNode(node_id="n3", mu=0.70, se=0.05, lcb=0.60,
-                     experiment_config={"method": "Method C"}),
+            MockNode(node_id="n1", mu=0.90, se=0.01, lcb=0.88, experiment_config={"method": "Method A"}),
+            MockNode(node_id="n2", mu=0.85, se=0.02, lcb=0.81, experiment_config={"method": "Method B"}),
+            MockNode(node_id="n3", mu=0.70, se=0.05, lcb=0.60, experiment_config={"method": "Method C"}),
         ]
         path = gen.ci_bar_chart(nodes)
         assert path.exists()

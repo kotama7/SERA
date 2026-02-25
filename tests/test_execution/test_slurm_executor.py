@@ -84,9 +84,7 @@ class TestSlurmExecutorInit:
 class TestSlurmExecutorRun:
     def test_successful_run(self, tmp_workspace, slurm_config):
         """A job that completes successfully returns success=True."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="COMPLETED", job_result=0)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -175,9 +173,7 @@ class TestSlurmExecutorRun:
 
     def test_oom_detection_via_state(self, tmp_workspace, slurm_config):
         """A job in OUT_OF_MEMORY state returns exit_code=-7."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="OUT_OF_MEMORY", job_result=137
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="OUT_OF_MEMORY", job_result=137)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -229,9 +225,7 @@ class TestSlurmExecutorRun:
 class TestSlurmCancelledState:
     def test_cancelled_job_returns_minus15(self, tmp_workspace, slurm_config):
         """A CANCELLED SLURM job returns exit_code=-15."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="CANCELLED", job_result=0
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="CANCELLED", job_result=0)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -254,9 +248,7 @@ class TestSlurmCancelledState:
 class TestSlurmSqueueFallback:
     def test_squeue_polling_completed(self, tmp_workspace, slurm_config):
         """When sacct is unavailable, squeue polling detects completion."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="COMPLETED", job_result=0)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -274,9 +266,7 @@ class TestSlurmSqueueFallback:
 
             # Mock squeue to return empty (job finished)
             with patch("subprocess.run") as mock_squeue:
-                mock_squeue.return_value = MagicMock(
-                    stdout="", returncode=0
-                )
+                mock_squeue.return_value = MagicMock(stdout="", returncode=0)
                 result = exe.run(node_id="node-sq", script_path=script, seed=42)
 
         assert result.success is True
@@ -284,9 +274,7 @@ class TestSlurmSqueueFallback:
 
     def test_squeue_polling_detects_oom(self, tmp_workspace, slurm_config):
         """squeue polling detects OUT_OF_MEMORY state."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="OUT_OF_MEMORY", job_result=137
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="OUT_OF_MEMORY", job_result=137)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -302,9 +290,7 @@ class TestSlurmSqueueFallback:
             script.write_text("")
 
             with patch("subprocess.run") as mock_squeue:
-                mock_squeue.return_value = MagicMock(
-                    stdout="OUT_OF_MEMORY\n", returncode=0
-                )
+                mock_squeue.return_value = MagicMock(stdout="OUT_OF_MEMORY\n", returncode=0)
                 result = exe.run(node_id="node-sq-oom", script_path=script, seed=42)
 
         assert result.success is False
@@ -312,9 +298,7 @@ class TestSlurmSqueueFallback:
 
     def test_squeue_polling_detects_cancelled(self, tmp_workspace, slurm_config):
         """squeue polling detects CANCELLED state."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="CANCELLED", job_result=0
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="CANCELLED", job_result=0)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -330,9 +314,7 @@ class TestSlurmSqueueFallback:
             script.write_text("")
 
             with patch("subprocess.run") as mock_squeue:
-                mock_squeue.return_value = MagicMock(
-                    stdout="CANCELLED\n", returncode=0
-                )
+                mock_squeue.return_value = MagicMock(stdout="CANCELLED\n", returncode=0)
                 result = exe.run(node_id="node-sq-cancel", script_path=script, seed=42)
 
         assert result.success is False
@@ -340,9 +322,7 @@ class TestSlurmSqueueFallback:
 
     def test_squeue_polling_timeout(self, tmp_workspace, slurm_config):
         """squeue polling raises timeout correctly."""
-        fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="RUNNING", job_result=0
-        )
+        fake_submitit, fake_job, fake_executor = _make_fake_submitit(job_state="RUNNING", job_result=0)
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
             from sera.execution.slurm_executor import SlurmExecutor
@@ -361,12 +341,8 @@ class TestSlurmSqueueFallback:
                 patch("subprocess.run") as mock_squeue,
                 patch("sera.execution.slurm_executor.SlurmExecutor._cancel_job"),
             ):
-                mock_squeue.return_value = MagicMock(
-                    stdout="RUNNING\n", returncode=0
-                )
-                result = exe.run(
-                    node_id="node-sq-to", script_path=script, seed=42, timeout_sec=0.05
-                )
+                mock_squeue.return_value = MagicMock(stdout="RUNNING\n", returncode=0)
+                result = exe.run(node_id="node-sq-to", script_path=script, seed=42, timeout_sec=0.05)
 
         assert result.success is False
         assert result.exit_code == -9
@@ -405,7 +381,11 @@ class TestParseTimeLimit:
 @pytest.fixture
 def compute_config():
     return ComputeConfig(
-        gpu_count=2, memory_gb=64, cpu_cores=16, gpu_type="A100", gpu_required=True,
+        gpu_count=2,
+        memory_gb=64,
+        cpu_cores=16,
+        gpu_type="A100",
+        gpu_required=True,
     )
 
 
@@ -434,7 +414,8 @@ class TestComputeConfigMapping:
     def test_compute_params_mapped(self, tmp_workspace, slurm_config_no_extra, compute_config):
         """ComputeConfig fields are mapped to submitit parameters in run()."""
         fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0,
+            job_state="COMPLETED",
+            job_result=0,
         )
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
@@ -468,10 +449,15 @@ class TestComputeConfigMapping:
     def test_gpu_type_as_constraint(self, tmp_workspace, slurm_config_no_extra):
         """gpu_type is added as a constraint in additional_parameters."""
         cfg = ComputeConfig(
-            gpu_count=1, memory_gb=16, cpu_cores=4, gpu_type="V100", gpu_required=True,
+            gpu_count=1,
+            memory_gb=16,
+            cpu_cores=4,
+            gpu_type="V100",
+            gpu_required=True,
         )
         fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0,
+            job_state="COMPLETED",
+            job_result=0,
         )
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
@@ -501,7 +487,8 @@ class TestComputeConfigMapping:
             sbatch_extra=["--gres=gpu:4"],
         )
         fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0,
+            job_state="COMPLETED",
+            job_result=0,
         )
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
@@ -532,7 +519,8 @@ class TestComputeConfigMapping:
             sbatch_extra=["--mem=128G"],
         )
         fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0,
+            job_state="COMPLETED",
+            job_result=0,
         )
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
@@ -557,7 +545,8 @@ class TestComputeConfigMapping:
     def test_no_compute_config_backward_compat(self, tmp_workspace, slurm_config):
         """compute_config=None preserves existing behavior."""
         fake_submitit, fake_job, fake_executor = _make_fake_submitit(
-            job_state="COMPLETED", job_result=0,
+            job_state="COMPLETED",
+            job_result=0,
         )
 
         with patch.dict(sys.modules, {"submitit": fake_submitit}):
@@ -590,7 +579,11 @@ class TestComputeConfigMapping:
         from sera.execution.slurm_executor import SlurmExecutor
 
         cfg = ComputeConfig(
-            gpu_count=2, memory_gb=32, cpu_cores=8, gpu_type="", gpu_required=False,
+            gpu_count=2,
+            memory_gb=32,
+            cpu_cores=8,
+            gpu_type="",
+            gpu_required=False,
         )
         params = SlurmExecutor._build_compute_params(cfg)
         assert "slurm_gpus_per_node" not in params

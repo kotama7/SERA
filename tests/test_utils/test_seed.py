@@ -1,4 +1,5 @@
 """Tests for sera.utils.seed module."""
+
 import random
 import numpy as np
 import torch

@@ -18,106 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Prompt templates
+# Prompt templates (loaded from sera/prompts/search.yaml)
 # ---------------------------------------------------------------------------
 
-DRAFT_PROMPT = """You are a research agent designing experiments for the following problem:
+from sera.prompts import get_search_category_prompts, get_search_prompt
 
-Problem: {problem_description}
-Objective: {objective}
-Manipulated variables: {variables}
-Constraints: {constraints}
-
-{existing_context}
-
-Generate {n} diverse experiment proposals. Each proposal should include:
-- hypothesis: a clear, testable hypothesis
-- experiment_config: a dict of variable assignments (only manipulated variables)
-- rationale: why this approach might work
-
-Return a JSON array of objects with keys: hypothesis, experiment_config, rationale.
-```json
-[{{"hypothesis": "...", "experiment_config": {{}}, "rationale": "..."}}]
-```"""
-
-DRAFT_CATEGORY_PROMPTS = {
-    "baseline": (
-        "Propose a straightforward baseline approach. Use well-known, conventional methods as a reference point."
-    ),
-    "open_problem": (
-        "Propose an approach addressing a known open problem or limitation "
-        "in the field. Focus on tackling a recognised challenge."
-    ),
-    "novel": (
-        "Propose a creative, unconventional approach. "
-        "Think outside the box and try something that hasn't been tried before."
-    ),
-}
-
-DRAFT_CATEGORY_PROMPT = """You are a research agent designing experiments for the following problem:
-
-Problem: {problem_description}
-Objective: {objective}
-Manipulated variables: {variables}
-Constraints: {constraints}
-
-Category: {category_instruction}
-
-Generate {n} experiment proposals of this category. Each proposal should include:
-- hypothesis: a clear, testable hypothesis
-- experiment_config: a dict of variable assignments (only manipulated variables)
-- rationale: why this approach might work
-
-Return a JSON array of objects with keys: hypothesis, experiment_config, rationale.
-```json
-[{{"hypothesis": "...", "experiment_config": {{}}, "rationale": "..."}}]
-```"""
-
-DEBUG_PROMPT = """You are debugging a failed experiment.
-
-Problem: {problem_description}
-Hypothesis: {hypothesis}
-Experiment config: {experiment_config}
-
-The experiment code failed with error:
-{error_message}
-
-Experiment code:
-```{code_block_tag}
-{experiment_code}
-```
-
-Fix the code. Return a JSON object with:
-- hypothesis: the same or refined hypothesis
-- experiment_config: the same config (or minimally adjusted)
-- experiment_code: the corrected code
-- rationale: what was wrong and how you fixed it
-
-```json
-{{"hypothesis": "...", "experiment_config": {{}}, "experiment_code": "...", "rationale": "..."}}
-```"""
-
-IMPROVE_PROMPT = """You are improving an experiment that produced results.
-
-Problem: {problem_description}
-Objective: {objective}
-Manipulated variables: {variables}
-
-Parent experiment:
-- Hypothesis: {parent_hypothesis}
-- Config: {parent_config}
-- Result: mu={parent_mu}, SE={parent_se}, LCB={parent_lcb}
-- Feasible: {parent_feasible}
-
-{sibling_context}
-
-{failure_context}
-
-Propose {n_children} atomic improvements. Each should change at most 1-2 variables.
-Return a JSON array:
-```json
-[{{"hypothesis": "...", "experiment_config": {{}}, "rationale": "..."}}]
-```"""
+DRAFT_PROMPT = get_search_prompt("draft")
+DRAFT_CATEGORY_PROMPTS = get_search_category_prompts()
+DRAFT_CATEGORY_PROMPT = get_search_prompt("draft_category")
+DEBUG_PROMPT = get_search_prompt("debug")
+IMPROVE_PROMPT = get_search_prompt("improve")
 
 
 class TreeOps:
@@ -131,12 +41,34 @@ class TreeOps:
         LLM client with an async ``generate(prompt, temperature)`` method.
     rng : random.Random | None
         Optional random number generator for reproducibility.
+    agent_loop : AgentLoop | None
+        Optional ReAct loop for multi-step tool-using reasoning.
+        When provided, operators with tool bindings (debug, improve) use
+        the agent loop instead of single-shot LLM calls.
     """
 
-    def __init__(self, specs: Any, agent_llm: Any, rng: Any = None):
+    def __init__(self, specs: Any, agent_llm: Any, rng: Any = None, agent_loop: Any = None):
         self.specs = specs
         self.agent_llm = agent_llm
         self.rng = rng
+        self.agent_loop = agent_loop
+
+        # Resolve function → tool bindings from plan_spec
+        plan = getattr(specs, "plan", None)
+        agent_commands = getattr(plan, "agent_commands", None)
+        functions_cfg = getattr(agent_commands, "functions", None)
+        self._function_tool_bindings: dict[str, list[str]] = {}
+        if functions_cfg is not None:
+            bindings = getattr(functions_cfg, "function_tool_bindings", {})
+            if isinstance(bindings, dict):
+                self._function_tool_bindings = bindings
+
+        # Resolve per-function loop overrides from plan_spec
+        self._loop_overrides: dict[str, dict] = {}
+        if agent_commands is not None:
+            overrides = getattr(agent_commands, "function_loop_overrides", {})
+            if isinstance(overrides, dict):
+                self._loop_overrides = overrides
 
     async def draft(self, n: int, all_nodes: dict | None = None) -> list[SearchNode]:
         """Section 6.5.1: Draft new approaches.
@@ -325,6 +257,11 @@ class TreeOps:
 
         Present experiment_code + error_message to LLM.
         Returns new node with same config but fixed code, debug_depth+1.
+
+        When ``agent_loop`` is available and ``search_debug`` has tool
+        bindings (e.g. read_experiment_log, read_file), the ReAct loop
+        is used so the agent can inspect logs and files before proposing
+        a fix.
         """
         problem_spec = self.specs.problem
         problem_description = getattr(problem_spec.objective, "description", "Maximize score")
@@ -344,22 +281,51 @@ class TreeOps:
         )
 
         temperature = getattr(self.specs, "_debug_temperature", 0.5)
+        parsed = None
 
-        # Prefer call_function path
-        if hasattr(self.agent_llm, "call_function"):
-            parsed = await self.agent_llm.call_function(
-                "search_debug", prompt=prompt, purpose="debug", temperature=temperature
-            )
-        else:
-            response = await self.agent_llm.generate(prompt, purpose="debug", temperature=temperature)
-            parsed = self._parse_json_response(response)
+        # Use AgentLoop if available and search_debug has tool bindings
+        tool_bindings = self._function_tool_bindings.get("search_debug", [])
+        if self.agent_loop is not None and tool_bindings:
+            try:
+                tool_hint = (
+                    "\n\nBefore answering, use the available tools to investigate the issue. "
+                    f"Available tools: {', '.join(tool_bindings)}. "
+                    "To call a tool, output ONLY:\n"
+                    '<tool_call>\n{"name": "tool_name", "arguments": {"key": "value"}}\n</tool_call>\n'
+                    "Do NOT hallucinate tool results. Call the tool and wait for the actual result."
+                )
+                loop_result = await self.agent_loop.run(
+                    task_prompt=prompt + tool_hint,
+                    purpose="debug",
+                    available_tools=tool_bindings,
+                )
+                if loop_result.final_output:
+                    parsed = self._parse_json_response(loop_result.final_output)
+                logger.info(
+                    "AgentLoop debug completed: steps=%d, tools=%d, exit=%s",
+                    loop_result.total_steps,
+                    loop_result.total_tool_calls,
+                    loop_result.exit_reason,
+                )
+            except Exception as e:
+                logger.warning("AgentLoop debug failed, falling back to single-shot: %s", e)
+
+        # Fallback to single-shot call_function
+        if parsed is None:
+            if hasattr(self.agent_llm, "call_function"):
+                parsed = await self.agent_llm.call_function(
+                    "search_debug", prompt=prompt, purpose="debug", temperature=temperature
+                )
+            else:
+                response = await self.agent_llm.generate(prompt, purpose="debug", temperature=temperature)
+                parsed = self._parse_json_response(response)
 
         if parsed and isinstance(parsed, dict):
             new_node = SearchNode(
                 parent_id=failed_node.node_id,
                 depth=failed_node.depth + 1,
                 hypothesis=parsed.get("hypothesis", failed_node.hypothesis),
-                experiment_config=parsed.get("experiment_config", failed_node.experiment_config),
+                experiment_config=failed_node.experiment_config,  # Debug must not change config
                 experiment_code=parsed.get("experiment_code"),
                 branching_op="debug",
                 rationale=parsed.get("rationale", ""),
@@ -418,33 +384,64 @@ class TreeOps:
 
         temperature = getattr(self.specs, "_improve_temperature", 0.7)
 
-        # Prefer call_function path
-        if hasattr(self.agent_llm, "call_function"):
-            result = await self.agent_llm.call_function(
-                "search_improve", prompt=prompt, purpose="improve", temperature=temperature
-            )
-            proposals = None
-            if isinstance(result, list) and result:
-                proposals = result
-            elif isinstance(result, dict):
-                proposals = [result]
-        else:
-            # Legacy path (deprecated)
-            proposals = None
-            for attempt in range(3):
-                try:
-                    response = await self.agent_llm.generate(
-                        prompt, purpose="improve", temperature=temperature + attempt * 0.1
-                    )
-                    parsed = self._parse_json_response(response)
-                    if parsed is not None:
-                        if isinstance(parsed, list):
-                            proposals = parsed
-                        elif isinstance(parsed, dict):
-                            proposals = [parsed]
-                        break
-                except Exception as e:
-                    logger.warning("Improve attempt %d failed: %s", attempt + 1, e)
+        proposals = None
+
+        # Use AgentLoop if available and search_improve has tool bindings
+        tool_bindings = self._function_tool_bindings.get("search_improve", [])
+        if self.agent_loop is not None and tool_bindings:
+            try:
+                tool_hint = (
+                    "\n\nBefore proposing improvements, use the available tools to gather information. "
+                    f"Available tools: {', '.join(tool_bindings)}. "
+                    "To call a tool, output ONLY:\n"
+                    '<tool_call>\n{"name": "tool_name", "arguments": {"key": "value"}}\n</tool_call>\n'
+                    "Do NOT hallucinate tool results. Call the tool and wait for the actual result."
+                )
+                loop_result = await self.agent_loop.run(
+                    task_prompt=prompt + tool_hint,
+                    purpose="improve",
+                    available_tools=tool_bindings,
+                )
+                if loop_result.final_output:
+                    parsed = self._parse_json_response(loop_result.final_output)
+                    if isinstance(parsed, list) and parsed:
+                        proposals = parsed
+                    elif isinstance(parsed, dict):
+                        proposals = [parsed]
+                logger.info(
+                    "AgentLoop improve completed: steps=%d, tools=%d, exit=%s",
+                    loop_result.total_steps,
+                    loop_result.total_tool_calls,
+                    loop_result.exit_reason,
+                )
+            except Exception as e:
+                logger.warning("AgentLoop improve failed, falling back to single-shot: %s", e)
+
+        # Fallback to single-shot
+        if proposals is None:
+            if hasattr(self.agent_llm, "call_function"):
+                result = await self.agent_llm.call_function(
+                    "search_improve", prompt=prompt, purpose="improve", temperature=temperature
+                )
+                if isinstance(result, list) and result:
+                    proposals = result
+                elif isinstance(result, dict):
+                    proposals = [result]
+            else:
+                for attempt in range(3):
+                    try:
+                        response = await self.agent_llm.generate(
+                            prompt, purpose="improve", temperature=temperature + attempt * 0.1
+                        )
+                        parsed = self._parse_json_response(response)
+                        if parsed is not None:
+                            if isinstance(parsed, list):
+                                proposals = parsed
+                            elif isinstance(parsed, dict):
+                                proposals = [parsed]
+                            break
+                    except Exception as e:
+                        logger.warning("Improve attempt %d failed: %s", attempt + 1, e)
 
         if not proposals:
             logger.warning("All improve attempts failed, returning empty list")
@@ -454,11 +451,79 @@ class TreeOps:
         for proposal in proposals[:n_children]:
             exp_config = proposal.get("experiment_config", {})
 
-            # Validate config
+            # Validate config with retry: feed validation errors back to LLM up to 2 times
             is_valid, errors = validate_experiment_config(exp_config, problem_spec)
             if not is_valid:
                 logger.warning("Invalid experiment config from improve: %s", errors)
-                continue
+                max_validation_retries = 2
+                for retry_i in range(max_validation_retries):
+                    retry_prompt = (
+                        f"Your previous proposal had validation errors:\n"
+                        f"{chr(10).join(errors)}\n\n"
+                        f"Original proposal:\n{json.dumps(proposal, indent=2)}\n\n"
+                        f"Parent config:\n{json.dumps(parent.experiment_config, indent=2)}\n\n"
+                        f"Variables: {variables}\n"
+                        f"Objective: {objective}\n\n"
+                        f"Please fix the experiment_config and return a corrected JSON object with "
+                        f"keys: hypothesis, experiment_config, rationale.\n"
+                        f"Output ONLY the JSON, no other text."
+                    )
+                    retry_temperature = temperature + (retry_i + 1) * 0.1
+                    try:
+                        if hasattr(self.agent_llm, "call_function"):
+                            retry_result = await self.agent_llm.call_function(
+                                "search_improve",
+                                prompt=retry_prompt,
+                                purpose="improve_validation_retry",
+                                temperature=retry_temperature,
+                            )
+                            if isinstance(retry_result, list) and retry_result:
+                                retry_result = retry_result[0]
+                        else:
+                            retry_response = await self.agent_llm.generate(
+                                retry_prompt,
+                                purpose="improve_validation_retry",
+                                temperature=retry_temperature,
+                            )
+                            retry_result = self._parse_json_response(retry_response)
+                            if isinstance(retry_result, list) and retry_result:
+                                retry_result = retry_result[0]
+
+                        if isinstance(retry_result, dict):
+                            exp_config = retry_result.get("experiment_config", exp_config)
+                            proposal = retry_result
+                            is_valid, errors = validate_experiment_config(exp_config, problem_spec)
+                            if is_valid:
+                                logger.info(
+                                    "Validation retry %d/%d succeeded for improve proposal",
+                                    retry_i + 1,
+                                    max_validation_retries,
+                                )
+                                break
+                            else:
+                                logger.warning(
+                                    "Validation retry %d/%d still invalid: %s",
+                                    retry_i + 1,
+                                    max_validation_retries,
+                                    errors,
+                                )
+                        else:
+                            logger.warning(
+                                "Validation retry %d/%d returned non-dict, skipping",
+                                retry_i + 1,
+                                max_validation_retries,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Validation retry %d/%d failed with exception: %s",
+                            retry_i + 1,
+                            max_validation_retries,
+                            e,
+                        )
+
+                if not is_valid:
+                    logger.warning("Skipping proposal after %d validation retries", max_validation_retries)
+                    continue
 
             # Warn if more than 1 key differs from parent
             diff_keys = [
@@ -574,10 +639,37 @@ class TreeOps:
             if best_node.node_id not in {s.node_id for s in siblings}:
                 siblings.append(best_node)
 
-        if not siblings:
+        # Include up to 2 constraint violation examples from pruned siblings (section 6.8.1)
+        pruned_violations = [
+            node
+            for node in all_nodes.values()
+            if node.parent_id == parent.parent_id
+            and node.node_id != parent.node_id
+            and node.status == "pruned"
+            and not getattr(node, "feasible", True)
+        ][:2]
+
+        if not siblings and not pruned_violations:
             return "No sibling experiments available yet."
 
         lines = ["Related experiments:"]
+
+        # Show constraint violation examples first as warnings
+        for pv in pruned_violations:
+            diff_parts = []
+            all_keys = set(list(pv.experiment_config.keys()) + list(parent.experiment_config.keys()))
+            for k in sorted(all_keys):
+                sv = pv.experiment_config.get(k)
+                pk = parent.experiment_config.get(k)
+                if sv != pk:
+                    diff_parts.append(f"{k}: {pk} -> {sv}")
+            diff_str = ", ".join(diff_parts) if diff_parts else "same config"
+            lines.append(
+                f"- [CONSTRAINT VIOLATION - pruned] {pv.hypothesis}\n"
+                f"  Config diff: {diff_str}\n"
+                f"  Reason: infeasible (violated constraints)"
+            )
+
         for sib in siblings:
             is_best = best_node and sib.node_id == best_node.node_id
             label = " [BEST]" if is_best else ""

@@ -1,4 +1,5 @@
 """Tests for sera.utils.hashing module."""
+
 import json
 import pytest
 from pathlib import Path
@@ -62,6 +63,7 @@ class TestVerifySpecHash:
     def test_round_trip(self, tmp_path):
         """Hash written to lock file matches re-computed hash."""
         import yaml
+
         spec_data = {"model": "test", "rank": 4}
         spec_path = tmp_path / "spec.yaml"
         lock_path = tmp_path / "spec.lock"
@@ -77,6 +79,7 @@ class TestVerifySpecHash:
     def test_tampered_spec(self, tmp_path):
         """Modified spec file fails verification."""
         import yaml
+
         spec_data = {"model": "test", "rank": 4}
         spec_path = tmp_path / "spec.yaml"
         lock_path = tmp_path / "spec.lock"

@@ -144,14 +144,15 @@ SERPAPI_RESPONSE = {
 # Semantic Scholar tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 class TestSemanticScholarClient:
     async def test_search_returns_paper_results(self):
         client = SemanticScholarClient()
         with respx.mock:
-            respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search"
-            ).mock(return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_SEARCH_RESPONSE))
+            respx.get("https://api.semanticscholar.org/graph/v1/paper/search").mock(
+                return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_SEARCH_RESPONSE)
+            )
 
             results = await client.search("iris classification", limit=10)
 
@@ -170,9 +171,9 @@ class TestSemanticScholarClient:
     async def test_search_with_year_filter(self):
         client = SemanticScholarClient()
         with respx.mock:
-            route = respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search"
-            ).mock(return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_SEARCH_RESPONSE))
+            route = respx.get("https://api.semanticscholar.org/graph/v1/paper/search").mock(
+                return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_SEARCH_RESPONSE)
+            )
 
             await client.search("iris", limit=5, year_from=2022)
 
@@ -181,9 +182,9 @@ class TestSemanticScholarClient:
     async def test_search_with_api_key(self):
         client = SemanticScholarClient(api_key="test-key-123")
         with respx.mock:
-            route = respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search"
-            ).mock(return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_SEARCH_RESPONSE))
+            route = respx.get("https://api.semanticscholar.org/graph/v1/paper/search").mock(
+                return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_SEARCH_RESPONSE)
+            )
 
             await client.search("test")
 
@@ -192,9 +193,9 @@ class TestSemanticScholarClient:
     async def test_get_references(self):
         client = SemanticScholarClient()
         with respx.mock:
-            respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/abc123/references"
-            ).mock(return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_REFS_RESPONSE))
+            respx.get("https://api.semanticscholar.org/graph/v1/paper/abc123/references").mock(
+                return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_REFS_RESPONSE)
+            )
 
             results = await client.get_references("abc123")
 
@@ -205,9 +206,9 @@ class TestSemanticScholarClient:
     async def test_get_citations(self):
         client = SemanticScholarClient()
         with respx.mock:
-            respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/abc123/citations"
-            ).mock(return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_CITS_RESPONSE))
+            respx.get("https://api.semanticscholar.org/graph/v1/paper/abc123/citations").mock(
+                return_value=httpx.Response(200, json=SEMANTIC_SCHOLAR_CITS_RESPONSE)
+            )
 
             results = await client.get_citations("abc123")
 
@@ -218,9 +219,9 @@ class TestSemanticScholarClient:
     async def test_search_empty_response(self):
         client = SemanticScholarClient()
         with respx.mock:
-            respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search"
-            ).mock(return_value=httpx.Response(200, json={"data": []}))
+            respx.get("https://api.semanticscholar.org/graph/v1/paper/search").mock(
+                return_value=httpx.Response(200, json={"data": []})
+            )
 
             results = await client.search("nonexistent")
 
@@ -230,6 +231,7 @@ class TestSemanticScholarClient:
 # ---------------------------------------------------------------------------
 # CrossRef tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 class TestCrossRefClient:
@@ -279,6 +281,7 @@ class TestCrossRefClient:
 # arXiv tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 class TestArxivClient:
     async def test_search_parses_xml(self):
@@ -317,14 +320,13 @@ class TestArxivClient:
 # WebSearchClient tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 class TestWebSearchClient:
     async def test_search_parses_organic_results(self):
         client = WebSearchClient(api_key="fake-key")
         with respx.mock:
-            respx.get("https://serpapi.com/search").mock(
-                return_value=httpx.Response(200, json=SERPAPI_RESPONSE)
-            )
+            respx.get("https://serpapi.com/search").mock(return_value=httpx.Response(200, json=SERPAPI_RESPONSE))
 
             results = await client.search("machine learning papers")
 
@@ -345,6 +347,7 @@ class TestWebSearchClient:
 # RelatedWorkEngine fallback tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 class TestRelatedWorkEngineFallback:
     async def test_fallback_across_clients(self):
@@ -355,9 +358,9 @@ class TestRelatedWorkEngineFallback:
 
         with respx.mock:
             # Semantic Scholar returns a connection error (not retried)
-            respx.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search"
-            ).mock(side_effect=httpx.ConnectError("connection refused"))
+            respx.get("https://api.semanticscholar.org/graph/v1/paper/search").mock(
+                side_effect=httpx.ConnectError("connection refused")
+            )
 
             # CrossRef returns valid data (match any CrossRef URL)
             respx.get(url__startswith="https://api.crossref.org/works").mock(

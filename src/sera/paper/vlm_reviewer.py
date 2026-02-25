@@ -47,9 +47,7 @@ class VLMReviewer:
                 import openai
                 import os
 
-                self._client = openai.OpenAI(
-                    api_key=os.environ.get("OPENAI_API_KEY", "")
-                )
+                self._client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
             except ImportError:
                 logger.warning("openai package not installed; VLM disabled.")
                 self.enabled = False
@@ -58,9 +56,7 @@ class VLMReviewer:
                 import anthropic
                 import os
 
-                self._client = anthropic.Anthropic(
-                    api_key=os.environ.get("ANTHROPIC_API_KEY", "")
-                )
+                self._client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
             except ImportError:
                 logger.warning("anthropic package not installed; VLM disabled.")
                 self.enabled = False
@@ -95,10 +91,12 @@ class VLMReviewer:
             b64 = self._encode_image(img_path)
             suffix = img_path.suffix.lstrip(".").lower()
             mime = f"image/{suffix}" if suffix in ("png", "jpeg", "jpg", "gif", "webp") else "image/png"
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{b64}"},
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                }
+            )
         try:
             resp = self._client.chat.completions.create(
                 model=self.model,
@@ -116,14 +114,16 @@ class VLMReviewer:
             b64 = self._encode_image(img_path)
             suffix = img_path.suffix.lstrip(".").lower()
             media_type = f"image/{suffix}" if suffix in ("png", "jpeg", "jpg", "gif", "webp") else "image/png"
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": b64,
-                },
-            })
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64,
+                    },
+                }
+            )
         content.append({"type": "text", "text": text_prompt})
         try:
             resp = self._client.messages.create(
@@ -236,13 +236,11 @@ class VLMReviewer:
                 ("SUGGESTION:", "suggestion"),
             ]:
                 if line.upper().startswith(key):
-                    result[field_name] = line[len(key):].strip()
+                    result[field_name] = line[len(key) :].strip()
 
         return result
 
-    def detect_duplicate_figures(
-        self, figure_paths: list[Path]
-    ) -> list[dict[str, Any]]:
+    def detect_duplicate_figures(self, figure_paths: list[Path]) -> list[dict[str, Any]]:
         """Detect potentially duplicate or highly similar figures.
 
         Parameters
@@ -294,12 +292,14 @@ class VLMReviewer:
                         recommendation = line.split(":")[1].strip().lower()
 
                 if similarity > 0.5:
-                    duplicates.append({
-                        "fig_a": figure_paths[i].name,
-                        "fig_b": figure_paths[j].name,
-                        "similarity": similarity,
-                        "recommendation": recommendation,
-                    })
+                    duplicates.append(
+                        {
+                            "fig_a": figure_paths[i].name,
+                            "fig_b": figure_paths[j].name,
+                            "similarity": similarity,
+                            "recommendation": recommendation,
+                        }
+                    )
             if pairs_checked >= max_pairs:
                 break
 

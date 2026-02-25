@@ -1,0 +1,323 @@
+prompts:
+  paper_outline:
+    description: "Create paper outline structure"
+    template: |-
+      You are an experienced academic writer creating a paper outline.
+
+      ## Research Summary
+      Title: {title}
+      Hypothesis: {hypothesis}
+      Methodology: {methodology_summary}
+
+      ## Experiment Results
+      {results_summary}
+
+      ## Best Approach
+      {best_approach_description}
+
+      ## Related Work Clusters
+      {clusters_summary}
+
+      ## Paper Format
+      Format: {paper_format}
+      Max pages: {max_pages}
+      Required sections: {required_sections_json}
+
+      ## Teacher Paper Structure
+      {teacher_structure_summary}
+
+      ## Instructions
+      Create a detailed outline for the research paper. For each section, provide:
+      1. The section heading.
+      2. A 2-3 sentence summary of what the section will cover.
+      3. Key points to include (as bullet points).
+      4. Approximate word count target.
+      5. Which figures/tables belong in this section.
+
+      Return as JSON:
+      {{
+        "outline": [
+          {{
+            "section": "<heading>",
+            "summary": "<what this section covers>",
+            "key_points": ["<point1>", "<point2>"],
+            "target_words": <int>,
+            "figures": ["<fig_description>"]
+          }}
+        ]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  paper_full_generation:
+    description: "Generate complete research paper in LaTeX"
+    template: |-
+      You are an expert academic writer producing a complete research paper.
+
+      ## Paper Outline
+      {outline_json}
+
+      ## Research Details
+      Title: {title}
+      Authors: {authors}
+      Abstract draft: {abstract_draft}
+
+      ## Methodology Details
+      {methodology_details}
+
+      ## Experiment Results
+      {results_details}
+
+      ## Related Work
+      {related_work_text}
+
+      ## Figures and Tables
+      {figures_tables_json}
+
+      ## Writing Style Guide
+      - Follow {paper_format} formatting conventions.
+      - Use {citation_style} citation style.
+      - Be concise but thorough.
+      - Every claim must be supported by evidence or citation.
+      - Use active voice where appropriate.
+      {teacher_style_notes}
+
+      ## Instructions
+      Write the complete paper in LaTeX format, following the outline provided. Include:
+      1. All required sections with appropriate depth.
+      2. Proper citation commands (\cite{{}}) where references are needed.
+      3. Figure and table references (\ref{{}}) matching the provided figures.
+      4. Mathematical notation where appropriate.
+      5. A clear narrative flow from introduction through conclusion.
+
+      Output ONLY the LaTeX content (no preamble/documentclass -- just the body sections).
+
+  paper_writeup_reflection:
+    description: "Self-reflection on paper draft quality"
+    template: |-
+      You are a critical academic reviewer providing feedback on a draft paper.
+
+      ## Paper Draft
+      {paper_draft}
+
+      ## Research Context
+      Title: {title}
+      Goal: {goal_objective}
+      Key results: {key_results}
+
+      ## Evaluation Criteria
+      1. Clarity: Is the writing clear and unambiguous?
+      2. Completeness: Are all claims supported? Are there gaps?
+      3. Flow: Does the narrative progress logically?
+      4. Technical accuracy: Are methods and results described correctly?
+      5. Conciseness: Is there unnecessary repetition or verbosity?
+
+      ## Instructions
+      Provide a detailed self-reflection on the draft. For each section, identify:
+      - Strengths (what works well)
+      - Weaknesses (what needs improvement)
+      - Specific suggestions for revision
+
+      Return as JSON:
+      {{
+        "overall_assessment": "<1-2 sentence summary>",
+        "section_feedback": [
+          {{
+            "section": "<section name>",
+            "strengths": ["<strength1>"],
+            "weaknesses": ["<weakness1>"],
+            "suggestions": ["<suggestion1>"]
+          }}
+        ],
+        "missing_elements": ["<missing1>"],
+        "priority_revisions": ["<revision1>", "<revision2>"]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  citation_search:
+    description: "Identify missing citations in paper draft"
+    template: |-
+      You are a research assistant identifying missing citations in a paper draft.
+
+      ## Paper Draft
+      {paper_draft}
+
+      ## Currently Cited Papers
+      {current_citations_json}
+
+      ## Instructions
+      Review the paper draft and identify claims or statements that need citations but currently lack them. For each missing citation, provide:
+      1. The exact sentence or phrase that needs a citation.
+      2. What kind of paper should be cited (method, dataset, finding, etc.).
+      3. A search query to find the appropriate paper.
+
+      Return as JSON:
+      {{
+        "missing_citations": [
+          {{
+            "text": "<the sentence needing a citation>",
+            "citation_type": "<method|dataset|finding|benchmark|tool|theory>",
+            "search_query": "<query to find the right paper>",
+            "importance": "<critical|important|nice_to_have>"
+          }}
+        ]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  citation_select:
+    description: "Select best citation from search results"
+    template: |-
+      You are a research assistant selecting the most relevant citation from search results.
+
+      ## Context
+      The following sentence needs a citation:
+      "{text_needing_citation}"
+
+      Citation type needed: {citation_type}
+
+      ## Search Results
+      {search_results_json}
+
+      ## Instructions
+      From the search results above, select the single most appropriate paper to cite. Consider:
+      1. Relevance to the specific claim being made.
+      2. Publication venue quality.
+      3. Recency (prefer recent work unless citing foundational results).
+      4. Citation count (as a proxy for community acceptance).
+
+      Return as JSON:
+      {{
+        "selected_paper_id": "<paper_id>",
+        "justification": "<why this paper is the best citation>"
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  plot_aggregation:
+    description: "Generate publication-quality comparison plot"
+    template: |-
+      You are a data visualization expert creating publication-quality figures.
+
+      ## Experiment Results
+      {results_json}
+
+      ## Approaches Compared
+      {approaches_json}
+
+      ## Metrics to Plot
+      {metrics_to_plot}
+
+      ## Paper Format
+      {paper_format} style, {figure_width_inches} inches wide.
+
+      ## Instructions
+      Write a Python script using matplotlib and seaborn that generates an aggregation plot comparing the experimental results across all approaches. The plot should:
+      1. Compare all approaches on the specified metrics.
+      2. Include error bars (confidence intervals from multiple runs).
+      3. Use colorblind-friendly colors.
+      4. Have clear, readable labels and a legend.
+      5. Follow {paper_format} figure conventions (font sizes, etc.).
+      6. Save the figure as both PDF and PNG.
+
+      The script should:
+      - Read results from a JSON file at `{results_path}`.
+      - Save the figure to `{output_path}`.
+      - Print the output file path to stdout.
+
+      Output ONLY the Python code, no markdown fences or other text.
+
+  vlm_figure_description:
+    description: "Describe a research figure using VLM"
+    template: |-
+      You are a vision-language model analyzing a figure from a research paper.
+
+      ## Figure Context
+      Figure file: {figure_path}
+      Section: {section_name}
+      Paper title: {paper_title}
+
+      ## Instructions
+      Describe this figure in detail, covering:
+      1. What type of visualization it is (bar chart, line plot, table, diagram, etc.).
+      2. What data or relationships it shows.
+      3. The key takeaway or finding illustrated.
+      4. The axes labels, legends, and any annotations.
+      5. Whether the figure is clear and well-formatted for publication.
+
+      Return as JSON:
+      {{
+        "figure_type": "<type>",
+        "description": "<detailed description>",
+        "key_finding": "<main takeaway>",
+        "axes": {{"x": "<x-axis label>", "y": "<y-axis label>"}},
+        "quality_assessment": "<assessment of visual quality>",
+        "suggestions": ["<improvement suggestion>"]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  vlm_figure_caption_review:
+    description: "Review figure caption quality"
+    template: |-
+      You are reviewing a figure and its caption for a research paper.
+
+      ## Figure Description
+      {figure_description}
+
+      ## Current Caption
+      {current_caption}
+
+      ## Section Context
+      {section_context}
+
+      ## Instructions
+      Evaluate whether the caption:
+      1. Accurately describes what the figure shows.
+      2. Is self-contained (reader can understand the figure from caption alone).
+      3. Highlights the key finding or takeaway.
+      4. References all relevant visual elements (axes, colors, symbols).
+      5. Uses proper cross-references to other figures/tables/sections.
+
+      Return as JSON:
+      {{
+        "caption_quality": "<good|needs_revision>",
+        "accuracy": "<does the caption match the figure?>",
+        "completeness": "<are all elements described?>",
+        "suggested_caption": "<improved caption if needed, or null>",
+        "missing_references": ["<missing cross-ref>"]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  vlm_duplicate_detection:
+    description: "Detect duplicate or near-duplicate figures"
+    template: |-
+      You are analyzing a set of figures from a research paper to detect duplicates or near-duplicates.
+
+      ## Figures
+      {figures_json}
+
+      ## Instructions
+      Examine the provided figure descriptions and identify any pairs that are:
+      1. Exact duplicates (same data, same visualization).
+      2. Near-duplicates (same data, slightly different presentation).
+      3. Overlapping (partially redundant information).
+
+      For each detected pair, recommend whether to merge, remove one, or keep both with differentiation.
+
+      Return as JSON:
+      {{
+        "duplicate_pairs": [
+          {{
+            "figure_a": "<figure_id_a>",
+            "figure_b": "<figure_id_b>",
+            "overlap_type": "<exact|near_duplicate|partial_overlap>",
+            "recommendation": "<merge|remove_one|differentiate>",
+            "justification": "<why>"
+          }}
+        ]
+      }}
+
+      Output ONLY the JSON, no other text.

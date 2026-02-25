@@ -96,12 +96,34 @@ class StatisticalEvaluator(Evaluator):
                     node.mark_failed(f"Metrics read error: {e}")
                     return
             else:
+                # Try to parse partial metrics even on failure
+                if result.metrics_path and result.metrics_path.exists():
+                    try:
+                        partial_metrics = json.loads(result.metrics_path.read_text(encoding="utf-8"))
+                        # Use NaN for missing fields
+                        if metric_name not in partial_metrics:
+                            partial_metrics[metric_name] = float("nan")
+                        node.add_metric(partial_metrics)
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
                 stderr_content = ""
                 if result.stderr_path and result.stderr_path.exists():
                     stderr_content = result.stderr_path.read_text(encoding="utf-8", errors="replace")[:2000]
                 if result.exit_code == -7:
                     node.status = "oom"
                     node.error_message = f"Out of memory: {stderr_content}"
+                    node.total_cost = getattr(getattr(self.execution_spec, "pruning", None), "budget_limit", None)
+                    budget_cfg = node.total_cost
+                    if hasattr(budget_cfg, "limit") and budget_cfg.limit is not None:
+                        node.total_cost = budget_cfg.limit
+                    else:
+                        node.total_cost = timeout
+                    return
+                if result.exit_code == -9:
+                    node.status = "timeout"
+                    node.error_message = f"Timeout after {timeout}s: {stderr_content}"
+                    node.total_cost = timeout
                     return
                 error_msg = f"Experiment failed (exit_code={result.exit_code}): {stderr_content}"
                 node.mark_failed(error_msg)
@@ -120,16 +142,18 @@ class StatisticalEvaluator(Evaluator):
 
         # Log evaluation result
         if self.eval_logger:
-            self.eval_logger.log({
-                "event": "node_evaluated",
-                "node_id": node.node_id,
-                "mu": node.mu,
-                "se": node.se,
-                "lcb": node.lcb,
-                "n_repeats_done": node.eval_runs,
-                "feasible": node.feasible,
-                "wall_time_sec": node.wall_time_sec,
-            })
+            self.eval_logger.log(
+                {
+                    "event": "node_evaluated",
+                    "node_id": node.node_id,
+                    "mu": node.mu,
+                    "se": node.se,
+                    "lcb": node.lcb,
+                    "n_repeats_done": node.eval_runs,
+                    "feasible": node.feasible,
+                    "wall_time_sec": node.wall_time_sec,
+                }
+            )
 
     async def evaluate_full(self, node: Any) -> None:
         """Run remaining repeats for thorough evaluation.
@@ -198,16 +222,18 @@ class StatisticalEvaluator(Evaluator):
 
         # Log full evaluation result
         if self.eval_logger:
-            self.eval_logger.log({
-                "event": "node_evaluated_full",
-                "node_id": node.node_id,
-                "mu": node.mu,
-                "se": node.se,
-                "lcb": node.lcb,
-                "n_repeats_done": node.eval_runs,
-                "feasible": node.feasible,
-                "wall_time_sec": node.wall_time_sec,
-            })
+            self.eval_logger.log(
+                {
+                    "event": "node_evaluated_full",
+                    "node_id": node.node_id,
+                    "mu": node.mu,
+                    "se": node.se,
+                    "lcb": node.lcb,
+                    "n_repeats_done": node.eval_runs,
+                    "feasible": node.feasible,
+                    "wall_time_sec": node.wall_time_sec,
+                }
+            )
 
     def _derive_seed(self, node_id: str, repeat_idx: int) -> int:
         """Derive a deterministic seed for a specific run."""
@@ -285,8 +311,10 @@ def update_stats(
     if n == 1:
         node.se = float("inf")
         node.lcb = float("-inf")
+        node.ucb = float("inf")
     else:
         variance = sum((v - mu) ** 2 for v in values) / (n - 1)
         se = math.sqrt(variance / n)
         node.se = se
         node.lcb = mu - lcb_coef * se
+        node.ucb = mu + lcb_coef * se

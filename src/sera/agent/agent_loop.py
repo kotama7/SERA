@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from sera.agent.agent_llm import GenerationOutput
-from sera.agent.tool_executor import ToolExecutor, ToolResult
+from sera.agent.tool_executor import ToolExecutor, ToolResult, get_tool_schemas
 from sera.utils.logging import JsonlLogger
 
 if TYPE_CHECKING:
@@ -88,6 +88,7 @@ class AgentLoop:
         purpose: str,
         available_tools: list[str] | None = None,
         adapter_node_id: str | None = None,
+        node_id: str | None = None,
     ) -> AgentLoopResult:
         """Execute the agent loop until completion or termination.
 
@@ -114,6 +115,10 @@ class AgentLoop:
 
         effective_tools = available_tools or self.config.allowed_tools
 
+        # Resolve tool names (list[str]) to tool schemas (list[dict])
+        # for generate_with_tools, which expects OpenAI-format dicts.
+        tool_schemas = get_tool_schemas(effective_tools) if effective_tools else []
+
         for step in range(self.config.max_steps):
             elapsed = time.monotonic() - start_time
             if elapsed > self.config.timeout_sec:
@@ -125,7 +130,7 @@ class AgentLoop:
                     total_wall_time_sec=elapsed,
                     exit_reason="timeout",
                 )
-                self._log_result(result, purpose)
+                self._log_result(result, purpose, node_id=node_id)
                 return result
 
             step_start = time.monotonic()
@@ -133,7 +138,7 @@ class AgentLoop:
             # Generate with tool-calling support
             gen_out = await self.agent_llm.generate_with_tools(
                 prompt=context,
-                available_tools=effective_tools,
+                available_tools=tool_schemas,
                 purpose=f"{purpose}_step{step}",
                 adapter_node_id=adapter_node_id,
             )
@@ -144,24 +149,28 @@ class AgentLoop:
                 for tc in gen_out.tool_calls:
                     # Budget check
                     if tool_call_count >= self.config.tool_call_budget:
-                        tool_results.append(ToolResult(
-                            tool_name=tc.tool_name,
-                            call_id=tc.call_id,
-                            success=False,
-                            output=None,
-                            error="Tool call budget exhausted",
-                        ))
+                        tool_results.append(
+                            ToolResult(
+                                tool_name=tc.tool_name,
+                                call_id=tc.call_id,
+                                success=False,
+                                output=None,
+                                error="Tool call budget exhausted",
+                            )
+                        )
                         break
 
                     # Filter by allowed tools
                     if effective_tools and tc.tool_name not in effective_tools:
-                        tool_results.append(ToolResult(
-                            tool_name=tc.tool_name,
-                            call_id=tc.call_id,
-                            success=False,
-                            output=None,
-                            error=f"Tool {tc.tool_name!r} not in allowed tools",
-                        ))
+                        tool_results.append(
+                            ToolResult(
+                                tool_name=tc.tool_name,
+                                call_id=tc.call_id,
+                                success=False,
+                                output=None,
+                                error=f"Tool {tc.tool_name!r} not in allowed tools",
+                            )
+                        )
                         continue
 
                     result = await self.tool_executor.execute(tc)
@@ -188,7 +197,7 @@ class AgentLoop:
                         total_wall_time_sec=time.monotonic() - start_time,
                         exit_reason="budget_exhausted",
                     )
-                    self._log_result(result, purpose)
+                    self._log_result(result, purpose, node_id=node_id)
                     return result
 
                 # Build observation and continue
@@ -214,7 +223,7 @@ class AgentLoop:
                     total_wall_time_sec=time.monotonic() - start_time,
                     exit_reason="completed",
                 )
-                self._log_result(result, purpose)
+                self._log_result(result, purpose, node_id=node_id)
                 return result
 
         # Max steps reached
@@ -227,7 +236,7 @@ class AgentLoop:
             total_wall_time_sec=total_wall,
             exit_reason="max_steps",
         )
-        self._log_result(result, purpose)
+        self._log_result(result, purpose, node_id=node_id)
         return result
 
     def _format_observations(self, tool_results: list[ToolResult]) -> str:
@@ -258,7 +267,7 @@ class AgentLoop:
         prefix = " " * spaces
         return "\n".join(prefix + line for line in text.splitlines())
 
-    def _log_result(self, result: AgentLoopResult, purpose: str) -> None:
+    def _log_result(self, result: AgentLoopResult, purpose: str, node_id: str | None = None) -> None:
         """Log loop result to agent_loop_log.jsonl."""
         if self._logger is None:
             return
@@ -269,7 +278,7 @@ class AgentLoop:
                 if tr.success:
                     tools_used[tr.tool_name] = tools_used.get(tr.tool_name, 0) + 1
 
-        self._logger.log({
+        entry: dict[str, Any] = {
             "event": "agent_loop_complete",
             "purpose": purpose,
             "total_steps": result.total_steps,
@@ -277,4 +286,8 @@ class AgentLoop:
             "total_wall_time_sec": result.total_wall_time_sec,
             "exit_reason": result.exit_reason,
             "tools_used": tools_used,
-        })
+        }
+        if node_id is not None:
+            entry["node_id"] = node_id
+
+        self._logger.log(entry)

@@ -53,8 +53,7 @@ async def handle_semantic_scholar_references(
     results = await client.get_references(paper_id, limit=limit)
     return {
         "papers": [
-            {"paper_id": r.paper_id, "title": r.title, "year": r.year, "authors": r.authors[:3]}
-            for r in results
+            {"paper_id": r.paper_id, "title": r.title, "year": r.year, "authors": r.authors[:3]} for r in results
         ],
         "total_results": len(results),
     }
@@ -94,10 +93,7 @@ async def handle_crossref_search(
     limit = args.get("limit", 10)
     results = await client.search(query, limit=limit)
     return {
-        "papers": [
-            {"paper_id": r.paper_id, "title": r.title, "year": r.year, "doi": r.doi}
-            for r in results
-        ],
+        "papers": [{"paper_id": r.paper_id, "title": r.title, "year": r.year, "doi": r.doi} for r in results],
         "total_results": len(results),
     }
 
@@ -143,8 +139,7 @@ async def handle_web_search(
     results = await client.search(query, limit=limit)
     return {
         "results": [
-            {"title": r.title, "url": r.url, "abstract": r.abstract[:300] if r.abstract else ""}
-            for r in results
+            {"title": r.title, "url": r.url, "abstract": r.abstract[:300] if r.abstract else ""} for r in results
         ],
         "total_results": len(results),
     }

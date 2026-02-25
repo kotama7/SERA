@@ -5,6 +5,7 @@ from sera.execution.local_executor import LocalExecutor
 from sera.execution.slurm_executor import SlurmExecutor
 from sera.execution.docker_executor import DockerExecutor
 from sera.execution.experiment_generator import ExperimentGenerator
+from sera.execution.ablation import AblationRunner, AblationResult
 
 __all__ = [
     "Executor",
@@ -13,4 +14,6 @@ __all__ = [
     "SlurmExecutor",
     "DockerExecutor",
     "ExperimentGenerator",
+    "AblationRunner",
+    "AblationResult",
 ]

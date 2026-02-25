@@ -213,6 +213,11 @@ sera replay <node_id> <seed>
 
 # Spec 整合性チェック
 sera validate-specs
+
+# 探索木の可視化（インタラクティブ HTML 生成）
+sera visualize
+sera visualize --step 50           # 特定ステップ
+sera visualize --output tree.html  # 出力先指定
 ```
 
 ## デフォルトのワークスペース構造

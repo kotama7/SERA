@@ -90,7 +90,7 @@ class HierarchicalAdvantageEstimator:
 
         # Negative variance -> penalise imbalance.
         # Scale so typical variance (~0.05) gives a modest penalty.
-        return -variance * 5.0
+        return -variance
 
     def _compute_low_level(self, rollout: PPORollout, turn_rewards: dict[str, float]) -> float:
         """Low-level advantage: mean per-phase reward relative to value baseline.

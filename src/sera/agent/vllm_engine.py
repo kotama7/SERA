@@ -96,9 +96,7 @@ class VLLMInferenceEngine:
         # Apply chat template for instruct models
         if hasattr(self._tokenizer, "apply_chat_template"):
             messages = [{"role": "user", "content": prompt}]
-            formatted_prompt = self._tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            formatted_prompt = self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         else:
             formatted_prompt = prompt
 

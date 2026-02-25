@@ -1,4 +1,5 @@
 """sera freeze-specs command implementation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +25,7 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
     with open(input1_path) as f:
         input1_data = yaml.safe_load(f)
     from sera.specs.input1 import Input1Model
+
     input1 = Input1Model(**input1_data)
 
     # Load Phase 0 outputs (use defaults if not present)

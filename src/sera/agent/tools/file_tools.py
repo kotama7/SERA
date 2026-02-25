@@ -28,7 +28,7 @@ async def handle_read_file(
 
     size = path.stat().st_size
     if size > policy.max_file_read_bytes:
-        content = path.read_text(encoding="utf-8", errors="replace")[:policy.max_file_read_bytes]
+        content = path.read_text(encoding="utf-8", errors="replace")[: policy.max_file_read_bytes]
         return {"content": content, "truncated": True, "size_bytes": size}
 
     content = path.read_text(encoding="utf-8", errors="replace")
@@ -99,7 +99,7 @@ async def handle_read_experiment_log(
     content = log_path.read_text(encoding="utf-8", errors="replace")
     if len(content) > policy.max_file_read_bytes:
         # Return tail for logs (most useful part)
-        content = content[-policy.max_file_read_bytes:]
+        content = content[-policy.max_file_read_bytes :]
         return {"content": content, "truncated": True, "log_type": log_type}
 
     return {"content": content, "truncated": False, "log_type": log_type}

@@ -38,10 +38,12 @@ class PaperComposer:
         self,
         output_dir: str | Path,
         n_writeup_reflections: int = 3,
+        log_dir: str | Path | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.n_writeup_reflections = n_writeup_reflections
+        self.log_dir = Path(log_dir) if log_dir else None
 
     async def compose(
         self,
@@ -51,6 +53,7 @@ class PaperComposer:
         agent_llm: Any | None = None,
         vlm: Any | None = None,
         semantic_scholar_client: Any | None = None,
+        ablation_runner: Any | None = None,
     ) -> Paper:
         """Run the full 6-step paper composition pipeline.
 
@@ -68,6 +71,10 @@ class PaperComposer:
             A VLMReviewer instance (or None to skip VLM steps).
         semantic_scholar_client:
             A SemanticScholarClient (or None to skip citation search).
+        ablation_runner:
+            An AblationRunner instance (or None to skip auto-ablation).
+            If provided, runs ablation experiments for the best node
+            and adds results to the evidence store before figure generation.
         """
         if agent_llm is None:
             raise ValueError("agent_llm is required for paper composition")
@@ -78,6 +85,19 @@ class PaperComposer:
         logger.info("Step 1: Log summarization")
         summaries = self._step1_log_summarization(evidence)
 
+        # -- Step 1b: Auto-ablation (optional) -------------------------
+        if ablation_runner is not None and evidence.best_node is not None:
+            logger.info("Step 1b: Running auto-ablation experiments")
+            try:
+                ablation_results = await ablation_runner.run_ablation(evidence.best_node)
+                if ablation_results:
+                    ablation_data = ablation_runner.format_results(ablation_results)
+                    evidence.add_ablation_data(ablation_data)
+                    summaries["ablation_data"] = ablation_data
+                    logger.info("Auto-ablation: %d results added", len(ablation_results))
+            except Exception as exc:
+                logger.warning("Auto-ablation failed: %s", exc)
+
         # -- Step 2: Plot aggregation ----------------------------------
         logger.info("Step 2: Plot aggregation")
         figures = await self._step2_plot_aggregation(evidence, agent_llm)
@@ -85,9 +105,7 @@ class PaperComposer:
 
         # -- Step 3: Citation search loop ------------------------------
         logger.info("Step 3: Citation search")
-        bib_entries = await self._step3_citation_search(
-            summaries, agent_llm, semantic_scholar_client
-        )
+        bib_entries = await self._step3_citation_search(summaries, agent_llm, semantic_scholar_client)
         paper.bib_entries = bib_entries
 
         # -- Step 4: VLM figure descriptions ---------------------------
@@ -97,16 +115,21 @@ class PaperComposer:
         # -- Step 5: Paper body generation + reflection ----------------
         logger.info("Step 5: Paper body generation")
         content = await self._step5_paper_body(
-            evidence, summaries, figures, figure_descriptions,
-            bib_entries, paper_spec, teacher_papers, agent_llm, vlm,
+            evidence,
+            summaries,
+            figures,
+            figure_descriptions,
+            bib_entries,
+            paper_spec,
+            teacher_papers,
+            agent_llm,
+            vlm,
         )
         paper.content = content
 
         # -- Step 6: Final integration ---------------------------------
         logger.info("Step 6: Final integration")
-        paper.content = self._step6_final_integration(
-            paper.content, figures, bib_entries
-        )
+        paper.content = self._step6_final_integration(paper.content, figures, bib_entries)
 
         # Save the paper
         paper_path = self.output_dir / "paper.md"
@@ -188,9 +211,7 @@ class PaperComposer:
     # Step 2: Plot aggregation
     # ------------------------------------------------------------------
 
-    async def _step2_plot_aggregation(
-        self, evidence: Any, agent_llm: Any
-    ) -> list[Path]:
+    async def _step2_plot_aggregation(self, evidence: Any, agent_llm: Any) -> list[Path]:
         """Generate figures using FigureGenerator + LLM-driven aggregation."""
         from sera.paper.figure_generator import FigureGenerator
 
@@ -255,7 +276,7 @@ class PaperComposer:
         searcher = CitationSearcher(
             semantic_scholar_client=ss_client,
             agent_llm=agent_llm,
-            log_dir=self.output_dir / "logs",
+            log_dir=self.log_dir or self.output_dir.parent / "logs",
         )
 
         context = json.dumps(summaries, default=str)[:5000]
@@ -265,9 +286,7 @@ class PaperComposer:
     # Step 4: VLM figure descriptions
     # ------------------------------------------------------------------
 
-    def _step4_vlm_descriptions(
-        self, figures: list[Path], vlm: Any | None
-    ) -> dict[str, str]:
+    def _step4_vlm_descriptions(self, figures: list[Path], vlm: Any | None) -> dict[str, str]:
         """Get VLM descriptions for each figure, or return empty dict."""
         if vlm is None or not getattr(vlm, "enabled", False):
             return {}
@@ -301,28 +320,19 @@ class PaperComposer:
         if paper_spec is not None:
             sections_required = getattr(paper_spec, "sections_required", [])
             if sections_required:
-                sections_hint = "Required sections: " + ", ".join(
-                    getattr(s, "key", str(s)) for s in sections_required
-                )
+                sections_hint = "Required sections: " + ", ".join(getattr(s, "key", str(s)) for s in sections_required)
 
         teacher_hint = ""
         if teacher_papers is not None:
             tps = getattr(teacher_papers, "teacher_papers", [])
             if tps:
-                teacher_hint = (
-                    "Style guidance from teacher papers: "
-                    + "; ".join(getattr(tp, "title", str(tp)) for tp in tps[:3])
+                teacher_hint = "Style guidance from teacher papers: " + "; ".join(
+                    getattr(tp, "title", str(tp)) for tp in tps[:3]
                 )
 
-        fig_list = "\n".join(
-            f"- {p.name}: {figure_descriptions.get(p.name, '(no description)')}"
-            for p in figures
-        )
+        fig_list = "\n".join(f"- {p.name}: {figure_descriptions.get(p.name, '(no description)')}" for p in figures)
 
-        bib_list = "\n".join(
-            f"- \\cite{{{e['citation_key']}}}: {e['title']}"
-            for e in bib_entries
-        )
+        bib_list = "\n".join(f"- \\cite{{{e['citation_key']}}}: {e['title']}" for e in bib_entries)
 
         results_table = summaries.get("results_table", "")
         best_info = summaries.get("best_node", {})
@@ -341,9 +351,7 @@ class PaperComposer:
             "For each section, list the key points to cover."
         )
 
-        outline = await agent_llm.generate(
-            prompt=outline_prompt, purpose="paper_outline"
-        )
+        outline = await agent_llm.generate(prompt=outline_prompt, purpose="paper_outline")
 
         # -- Step 5b: Full 1-pass generation ----------------------------
         draft_prompt = (
@@ -358,9 +366,7 @@ class PaperComposer:
             "Reference all relevant figures and cite all relevant papers."
         )
 
-        draft = await agent_llm.generate(
-            prompt=draft_prompt, purpose="paper_draft"
-        )
+        draft = await agent_llm.generate(prompt=draft_prompt, purpose="paper_draft")
 
         # -- Step 5c: Reflection loop -----------------------------------
         content = draft
@@ -372,9 +378,7 @@ class PaperComposer:
             if vlm is not None and getattr(vlm, "enabled", False) and figures:
                 try:
                     for fig_path in figures[:3]:
-                        review = vlm.review_figure_caption_refs(
-                            fig_path, "", []
-                        )
+                        review = vlm.review_figure_caption_refs(fig_path, "", [])
                         if review.get("suggestion"):
                             vlm_feedback += f"\n- {fig_path.name}: {review['suggestion']}"
                 except Exception:
@@ -389,14 +393,9 @@ class PaperComposer:
             )
             if vlm_feedback:
                 fix_prompt += f"VLM figure feedback:{vlm_feedback}\n\n"
-            fix_prompt += (
-                f"Current draft:\n{content[:6000]}\n\n"
-                "Return the COMPLETE fixed paper in Markdown."
-            )
+            fix_prompt += f"Current draft:\n{content[:6000]}\n\nReturn the COMPLETE fixed paper in Markdown."
 
-            content = await agent_llm.generate(
-                prompt=fix_prompt, purpose="paper_reflection"
-            )
+            content = await agent_llm.generate(prompt=fix_prompt, purpose="paper_reflection")
 
         return content
 
@@ -426,8 +425,12 @@ class PaperComposer:
 
         # Check for missing sections
         expected_sections = [
-            "abstract", "introduction", "method", "experiment",
-            "result", "conclusion",
+            "abstract",
+            "introduction",
+            "method",
+            "experiment",
+            "result",
+            "conclusion",
         ]
         content_lower = content.lower()
         for section in expected_sections:
@@ -460,11 +463,14 @@ class PaperComposer:
             replacement = f"![Figure {i}: \\1]({fig_path.name})"
             content = re.sub(pattern, replacement, content)
 
-        # Ensure citation keys are consistent
+        # Normalise citation keys: strip whitespace, ensure consistency
         for entry in bib_entries:
             key = entry["citation_key"]
-            # Normalise citation format
-            content = content.replace(f"\\cite{{{key}}}", f"\\cite{{{key}}}")
+            # Fix common LLM issues: extra spaces around keys in \cite{...}
+            content = re.sub(rf"\\cite\{{\s*{re.escape(key)}\s*\}}", f"\\\\cite{{{key}}}", content)
+            # Normalise variations like \citet, \citep to standard \cite
+            content = content.replace(f"\\citet{{{key}}}", f"\\cite{{{key}}}")
+            content = content.replace(f"\\citep{{{key}}}", f"\\cite{{{key}}}")
 
         # Add bibliography section if not present
         if bib_entries and "# references" not in content.lower():

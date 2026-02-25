@@ -1,4 +1,5 @@
 """Checkpoint save/load utilities."""
+
 import json
 from pathlib import Path
 
@@ -9,6 +10,13 @@ def save_checkpoint(state: dict, checkpoint_dir: Path, step: int) -> Path:
     path = checkpoint_dir / f"search_state_step_{step}.json"
     with open(path, "w") as f:
         json.dump(state, f, default=str, indent=2)
+
+    # Optionally save open_list separately for faster resume
+    if "open_list" in state:
+        open_list_path = checkpoint_dir / f"open_list_step_{step}.json"
+        with open(open_list_path, "w") as f:
+            json.dump(state["open_list"], f, default=str)
+
     return path
 
 

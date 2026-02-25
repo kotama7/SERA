@@ -6,6 +6,7 @@ from sera.paper.vlm_reviewer import VLMReviewer
 from sera.paper.citation_searcher import CitationSearcher
 from sera.paper.paper_composer import Paper, PaperComposer
 from sera.paper.paper_evaluator import PaperEvaluator, PaperScoreResult
+from sera.paper.latex_composer import LaTeXComposer
 
 __all__ = [
     "EvidenceStore",
@@ -16,4 +17,5 @@ __all__ = [
     "PaperComposer",
     "PaperEvaluator",
     "PaperScoreResult",
+    "LaTeXComposer",
 ]

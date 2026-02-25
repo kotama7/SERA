@@ -1,4 +1,5 @@
 """sera validate-specs command implementation."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,6 +46,7 @@ def run_validate_specs(work_dir: str) -> None:
 
     # Validate ExecutionSpec integrity
     from sera.phase1.spec_freezer import SpecFreezer
+
     freezer = SpecFreezer()
     if (specs_dir / "execution_spec.yaml").exists() and (specs_dir / "execution_spec.yaml.lock").exists():
         if freezer.verify(specs_dir):
@@ -70,6 +72,7 @@ def run_validate_specs(work_dir: str) -> None:
             continue
         try:
             import importlib
+
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
             with open(path) as f:
@@ -90,6 +93,7 @@ def run_validate_specs(work_dir: str) -> None:
         adapter = ms.get("adapter_spec", {})
         if adapter:
             from sera.utils.hashing import compute_adapter_spec_hash
+
             adapter_hash = compute_adapter_spec_hash(adapter)
             console.print(f"  [cyan]adapter_spec_hash[/cyan]: {adapter_hash}")
 

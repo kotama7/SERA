@@ -167,14 +167,27 @@ sera.commands/                    → CLIコマンドハンドラ
   replay_cmd                      → sera replay
   validate_cmd                    → sera validate-specs
   setup_cmd                       → sera setup (対話型セットアップウィザード)
+  visualize_cmd                   → sera visualize (探索木のインタラクティブHTML可視化)
+sera.visualization/
+  tree_visualizer                 → TreeVisualizer (D3.jsベースの探索木可視化)
+  node_formatter                  → format_node() (ノードデータの整形)
+  stats_calculator                → compute_stats() (統計情報の計算)
+  html_renderer                   → render_html() (HTML出力生成)
 sera.agent/
   agent_llm                       → 統合LLMインターフェース (local/OpenAI/Anthropic)
                                     PROMPT_FORMATTERS レジストリ (モデルファミリ別プロンプト整形)
                                     ToolCall / GenerationOutput データクラス
                                     generate_with_tools() (ネイティブtool calling対応)
                                     get_turn_log_probs() (MT-GRPO用Phase別ログ確率)
+  agent_functions                 → AgentFunctionRegistry (19個の登録済み関数)
+  agent_loop                      → AgentLoop (ReActループ、max_steps=10, budget=20, timeout=300s)
+  tool_executor                   → ToolExecutor (18ツール: SEARCH×6, EXECUTION×3, FILE×5, STATE×4)
+  tool_policy                     → ToolPolicy (Phase別ツール許可、書き込みホワイトリスト、レート制限)
+  mcp_client                      → MCPToolProvider (httpxベースのMCPプロトコル実装)
   prompt_templates                → 21個のプロンプトテンプレート (TEMPLATE_REGISTRY)
   vllm_engine                     → vLLMオフラインモード推論エンジン (LoRA hot-swap + sleep/wake)
+sera.prompts/                     → YAMLベースのプロンプトテンプレート (Phase別)
+  prompt_loader                   → テンプレートのロード・管理
 sera.specs/
   __init__ (AllSpecs)             → 10個のPydantic specモデルを集約するデータクラス
   input1                          → Input1Model (ユーザー入力)
@@ -213,14 +226,17 @@ sera.execution/
   slurm_executor                  → SlurmExecutor (submitit ベース)
   docker_executor                 → DockerExecutor (Docker SDK、GPU対応、OOM検出)
   experiment_generator            → ExperimentGenerator (LLMコード生成)
+  ablation                        → AblationRunner / AblationResult (auto-ablation実験実行)
 sera.evaluation/
   evaluator                       → Evaluator ABC (evaluate_initial / evaluate_full)
   statistical_evaluator           → StatisticalEvaluator (二段階逐次評価)
+  bootstrap_evaluator             → BootstrapEvaluator (ブートストラップ信頼区間、evaluation.bootstrap=True時)
   feasibility                     → check_feasibility (epsilon制約チェック)
 sera.learning/
   ppo_trainer                     → PPOTrainer (LoRAパラメータのみ更新、メソッド別Advantage計算)
-  reward                          → compute_reward() (レジストリパターンで3手法ディスパッチ)
-  rollout                         → PPORollout / PPORolloutV2 データクラス
+  reward                          → compute_reward() (レジストリパターンで4手法ディスパッチ)
+  rollout                         → PPORollout / PPORolloutV2 / PPORolloutV3 データクラス
+  tool_usage_learning             → ToolCallRecord / ToolUsageStats / compute_reward_tool_aware
   turn_reward                     → TurnRewardEvaluator (Phase毎のターンレベル報酬評価)
   hierarchical_ppo                → HierarchicalAdvantageEstimator (HiPER 3層Advantage分解)
 sera.lineage/
@@ -228,12 +244,13 @@ sera.lineage/
   pruner                          → Pruner (LCB閾値 + パレート + 予算プルーニング)
   cache                           → LRUCache (OrderedDict ベース、最大10エントリ)
 sera.paper/
-  paper_composer                  → PaperComposer (6ステップの論文生成パイプライン)
+  paper_composer                  → PaperComposer (6ステップの論文生成パイプライン、auto-ablation対応)
   paper_evaluator                 → PaperEvaluator (アンサンブルレビュー + メタレビュー)
   figure_generator                → FigureGenerator (matplotlib/graphviz)
   citation_searcher               → CitationSearcher (Semantic Scholar引用ループ)
   vlm_reviewer                    → VLMReviewer (OpenAI/Anthropic VLMによる図レビュー)
   evidence_store                  → EvidenceStore (インメモリのエビデンス集約器)
+  latex_composer                  → LaTeXComposer (Markdown → LaTeX 変換)
 sera.utils/
   seed                            → シード管理
   hashing                         → compute_spec_hash, compute_adapter_spec_hash
@@ -355,8 +372,9 @@ Input-1 YAML (ユーザー入力)
        │  → checkpoints/search_state_step_N.json (10ステップごと)
        │  → logs/*.jsonl (search, eval, ppo, agent_llm)
        │
-       ├─ Phase 7: PaperComposer.compose() (6ステップパイプライン)
+       ├─ Phase 7: PaperComposer.compose() (6ステップパイプライン + オプションのauto-ablation)
        │    1. ログ要約 → experiment_summaries.json
+       │    1b. Auto-ablation (ablation_runner提供時): AblationRunnerで最良ノードのアブレーション実験実行
        │    2. プロット集約 (FigureGenerator + LLMリフレクション) → figures/*.png
        │    3. 引用検索ループ (CitationSearcher, 最大20ラウンド)
        │    4. VLM図面記述 (VLMReviewer、有効時のみ)
@@ -412,7 +430,7 @@ class RunResult:
 
 `StatisticalEvaluator` は `metrics_raw` 内の各dictから `metric_name` キー (例: `"score"`) の値を抽出して mu/SE/LCB を計算する。
 
-### 4.3 PPORollout / PPORolloutV2 (sera.learning.rollout)
+### 4.3 PPORollout / PPORolloutV2 / PPORolloutV3 (sera.learning.rollout)
 
 ```python
 @dataclass
@@ -431,18 +449,25 @@ class PPORolloutV2(PPORollout):
     turn_rewards: dict[str, float] = field(default_factory=dict)
     # MT-GRPO/HiPER用: Phase毎のターンレベル報酬
     # 例: {"phase0": 0.9, "phase3": 1.0, "phase4": 0.6}
+
+@dataclass
+class PPORolloutV3(PPORolloutV2):
+    tool_trajectory: list = field(default_factory=list)
+    # tool_aware報酬用: ToolCallRecordのリスト
+    # ノードのライフタイム中のツール呼び出しを記録
 ```
 
-`PPORolloutV2` は `turn_reward_evaluator` が有効な場合に `SearchManager` で使用される。
+`PPORolloutV2` は `turn_reward_evaluator` が有効な場合に `SearchManager` で使用される。`PPORolloutV3` は `tool_aware` 報酬手法と組み合わせて、ツール使用効率に基づく報酬調整に使用される。
 
 ### 4.4 報酬計算 (sera.learning.reward.compute_reward)
 
-`compute_reward()` は **レジストリパターン** で `plan_spec.reward.method` に応じて 3 つの手法にディスパッチする:
+`compute_reward()` は **レジストリパターン** で `plan_spec.reward.method` に応じて 4 つの手法にディスパッチする:
 
 | 手法 | 関数 | 説明 |
 |------|------|------|
 | `outcome_rm` | `compute_reward_outcome_rm` | 従来方式（デフォルト） |
 | `mt_grpo` | `compute_reward_mt_grpo` | ターンレベル報酬の重み付き和 |
+| `tool_aware` | `compute_reward_tool_aware_dispatch` | `mt_grpo` をベースに、ツール使用効率のボーナス・失敗ペナルティを加算 |
 | `hiper` | `compute_reward_hiper` | HiPER（報酬値は `mt_grpo` に委譲、Advantage分解はPPOTrainer側） |
 
 **Outcome RM（デフォルト）**:
@@ -682,11 +707,11 @@ sera research --resume
 | 拡張対象 | メカニズム | 現在の実装 |
 |---------|----------|-----------|
 | 実験実行バックエンド | `Executor` ABC を継承 | `LocalExecutor` (subprocess), `SlurmExecutor` (submitit), `DockerExecutor` (Docker SDK) が実装済み |
-| 評価ロジック | `Evaluator` ABC を継承 | `StatisticalEvaluator` が実装済み |
+| 評価ロジック | `Evaluator` ABC を継承 | `StatisticalEvaluator`, `BootstrapEvaluator` が実装済み |
 | 論文検索プロバイダ | `BaseScholarClient` ABC を継承 | `SemanticScholarClient`, `CrossRefClient`, `ArxivClient`, `WebSearchClient` が実装済み |
 | 分岐オペレータ | `TreeOps` に新メソッド追加 | `draft`, `debug`, `improve` が実装済み |
 | LLMプロバイダ | `AgentLLM` のプロバイダ分岐 | `local` (transformers/vLLM), `openai`, `anthropic` が対応済み |
 | 実験言語 | `ProblemSpec.language` の設定 | `LanguageConfig` で `interpreter_command`, `file_extension`, `seed_arg_format`, `code_block_tag` を設定可能 |
 | プロンプトテンプレート | `TEMPLATE_REGISTRY` に新テンプレート追加 | 21個のテンプレートが登録済み |
-| 報酬手法 | `register_reward_method` デコレータで新手法を登録 | `outcome_rm`, `mt_grpo`, `hiper` が登録済み |
+| 報酬手法 | `register_reward_method` デコレータで新手法を登録 | `outcome_rm`, `mt_grpo`, `tool_aware`, `hiper` が登録済み |
 | Phase報酬評価器 | `TurnRewardEvaluator._PHASE_EVALUATORS` に新評価器を追加 | 5個の評価器が登録済み |

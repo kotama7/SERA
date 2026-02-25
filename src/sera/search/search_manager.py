@@ -176,7 +176,8 @@ class SearchManager:
                             summary = self.failure_extractor.extract(node)
                             # Inject into pending siblings (same parent)
                             siblings = [
-                                n for n in self.all_nodes.values()
+                                n
+                                for n in self.all_nodes.values()
                                 if n.parent_id == node.parent_id
                                 and n.node_id != node.node_id
                                 and n.status in ("pending", "evaluated")
@@ -189,17 +190,19 @@ class SearchManager:
                     node.children_ids.append(child.node_id)
                     self._add_node(child)
                 elif operator == "draft":
+                    # Re-draft (not root init): cap at min(branch_factor, 2) to limit
+                    # diversity-triggered drafts to 1-2 nodes
+                    branch_factor = getattr(exec_spec.search, "branch_factor", 3)
+                    redraft_count = min(branch_factor, 2)
                     new_nodes = await self.tree_ops.draft(
-                        getattr(exec_spec.search, "branch_factor", 3),
+                        redraft_count,
                         self.all_nodes,
                     )
                     for n in new_nodes:
                         self._add_node(n)
                 elif operator == "improve":
                     n_children = getattr(exec_spec.search, "branch_factor", 3)
-                    children = await self.tree_ops.improve(
-                        node, self.all_nodes, n_children
-                    )
+                    children = await self.tree_ops.improve(node, self.all_nodes, n_children)
                     for child in children:
                         node.children_ids.append(child.node_id)
                         self._add_node(child)
@@ -233,21 +236,20 @@ class SearchManager:
                         "budget_consumed": {
                             "steps": self.step,
                             "nodes": len(self.all_nodes),
-                            "wall_time_sec": sum(
-                                n.wall_time_sec for n in self.all_nodes.values()
-                            ),
+                            "wall_time_sec": sum(n.wall_time_sec for n in self.all_nodes.values()),
                         },
                     }
                 )
 
             # Step 3: PPO update when enough evaluated nodes (skipped if ppo_trainer is None)
             if self.ppo_trainer is not None and self.ppo_buffer:
-                n_evaluated = sum(
-                    1 for n in self.all_nodes.values() if n.status == "evaluated"
-                )
-                if self.ppo_trainer.should_update(n_evaluated):
+                evaluated_list = [n for n in self.all_nodes.values() if n.status == "evaluated"]
+                n_evaluated = len(evaluated_list)
+                if self.ppo_trainer.should_update(n_evaluated, evaluated_list):
                     try:
-                        logger.info("PPO update triggered (buffer size=%d, n_evaluated=%d)", len(self.ppo_buffer), n_evaluated)
+                        logger.info(
+                            "PPO update triggered (buffer size=%d, n_evaluated=%d)", len(self.ppo_buffer), n_evaluated
+                        )
                         rollouts = []
                         for entry in self.ppo_buffer:
                             entry_turn_rewards = entry.get("turn_rewards", {})
@@ -282,9 +284,7 @@ class SearchManager:
                             for entry in self.ppo_buffer:
                                 nid = entry["node_id"]
                                 if nid in self.all_nodes:
-                                    sync_adapter_assignment(
-                                        self.all_nodes[nid], True, new_adapter_id, self.all_nodes
-                                    )
+                                    sync_adapter_assignment(self.all_nodes[nid], True, new_adapter_id, self.all_nodes)
                             logger.info("Assigned new adapter %s to %d nodes", new_adapter_id[:8], len(self.ppo_buffer))
 
                         self.ppo_buffer.clear()
@@ -292,9 +292,11 @@ class SearchManager:
                         logger.error("PPO update failed: %s", e)
 
             # Step 4: Prune periodically
-            prune_interval = getattr(
-                getattr(exec_spec, "pruning", None), "prune_interval", 10
-            ) if getattr(exec_spec, "pruning", None) else 10
+            prune_interval = (
+                getattr(getattr(exec_spec, "pruning", None), "prune_interval", 10)
+                if getattr(exec_spec, "pruning", None)
+                else 10
+            )
             if self.pruner is not None and self.step % prune_interval == 0:
                 try:
                     open_nodes = [
@@ -302,11 +304,15 @@ class SearchManager:
                         for _, nid in self.open_list
                         if nid in self.all_nodes and nid not in self.closed_set
                     ]
-                    pruned_ids = self.pruner.prune(open_nodes, self.closed_set, self.all_nodes, exec_spec)
+                    workspace_dir = self.checkpoint_dir.parent if self.checkpoint_dir else None
+                    pruned_ids = self.pruner.prune(
+                        open_nodes, self.closed_set, self.all_nodes, exec_spec,
+                        workspace_dir=workspace_dir,
+                    )
                     if pruned_ids:
-                        self.open_list = [
-                            (p, nid) for p, nid in self.open_list if nid not in set(pruned_ids)
-                        ]
+                        pruned_set = set(pruned_ids)
+                        self.open_list = [(p, nid) for p, nid in self.open_list if nid not in pruned_set]
+                        self.closed_set.update(pruned_set)
                 except Exception as e:
                     logger.error("Pruning failed: %s", e)
 
@@ -331,14 +337,12 @@ class SearchManager:
 
             # If evaluate_initial called mark_failed or detected OOM, don't override
             if node.status in ("failed", "oom"):
-                logger.info(
-                    "Node %s %s during evaluation", node.node_id[:8], node.status
-                )
+                logger.info("Node %s %s during evaluation", node.node_id[:8], node.status)
                 self.closed_set.discard(node.node_id)  # Allow debug operator to pick it up
                 return
 
             # Check if in top-k for full eval
-            k = getattr(self.specs.execution.search, "sequential_eval_topk", 5)
+            k = getattr(getattr(self.specs.execution, "evaluation", None), "sequential_eval_topk", 5)
             if self._is_topk(node, k):
                 await self.evaluator.evaluate_full(node)
 
@@ -356,9 +360,7 @@ class SearchManager:
             if self.turn_reward_evaluator is not None and node.mu is not None:
                 parent_node = self.all_nodes.get(node.parent_id) if node.parent_id else None
                 try:
-                    turn_rewards = self.turn_reward_evaluator.evaluate_all(
-                        node, parent_node, self.all_nodes
-                    )
+                    turn_rewards = self.turn_reward_evaluator.evaluate_all(node, parent_node, self.all_nodes)
                 except Exception as e:
                     logger.warning("Turn reward evaluation failed for node %s: %s", node.node_id[:8], e)
 
@@ -395,28 +397,9 @@ class SearchManager:
         """
         exec_spec = self.specs.execution
         max_debug_depth = getattr(getattr(exec_spec, "search", None), "max_debug_depth", 3)
+        max_depth = getattr(exec_spec.search, "max_depth", 10)
 
-        # Check for failed nodes that can be debugged (oom nodes have status="oom", not "failed")
-        for node in self.all_nodes.values():
-            if (
-                node.status == "failed"
-                and node.debug_depth < max_debug_depth
-                and node.node_id not in self.closed_set
-            ):
-                self.closed_set.add(node.node_id)
-                return node, "debug"
-
-        # Step 3: Diversity check for draft re-trigger (TASK.md section 6.4)
-        evaluated = [n for n in self.all_nodes.values() if n.status == "evaluated"]
-        unique_methods = len({n.experiment_config.get("method", "") for n in evaluated})
-        min_diverse = getattr(exec_spec.search, "min_diverse_methods", 3)
-        draft_after = getattr(exec_spec.search, "draft_trigger_after", 10)
-        if len(evaluated) >= draft_after and unique_methods < min_diverse:
-            max_nodes = getattr(exec_spec.search, "max_nodes", 100)
-            if len(self.all_nodes) < max_nodes:
-                return (self.best_node or SearchNode()), "draft"
-
-        # Pop from priority queue
+        # Step 1: Pop from priority queue (pending→evaluate, evaluated→improve)
         while self.open_list:
             neg_priority, node_id = heapq.heappop(self.open_list)
             if node_id in self.closed_set:
@@ -430,14 +413,34 @@ class SearchManager:
             if node.status == "pending":
                 return node, "evaluate"
             elif node.status == "evaluated":
+                # Check max_depth before improve
+                if node.depth >= max_depth:
+                    continue
                 return node, "improve"
 
+        # Step 2: Check for failed nodes that can be debugged (oom nodes have status="oom", not "failed")
+        # Select the shallowest debug_depth first so shallow fixes are attempted before deep ones
+        debuggable = [
+            node
+            for node in self.all_nodes.values()
+            if node.status == "failed" and node.debug_depth < max_debug_depth and node.node_id not in self.closed_set
+        ]
+        if debuggable:
+            node = min(debuggable, key=lambda n: n.debug_depth)
+            self.closed_set.add(node.node_id)
+            return node, "debug"
+
+        # Step 3: Diversity check for draft re-trigger (TASK.md section 6.4)
+        evaluated = [n for n in self.all_nodes.values() if n.status == "evaluated"]
+        unique_methods = len({n.experiment_config.get("method", "") for n in evaluated})
+        min_diverse = getattr(exec_spec.search, "min_diverse_methods", 3)
+        draft_after = getattr(exec_spec.search, "draft_trigger_after", 10)
+        if len(evaluated) >= draft_after and unique_methods < min_diverse:
+            max_nodes = getattr(exec_spec.search, "max_nodes", 100)
+            if len(self.all_nodes) < max_nodes:
+                return (self.best_node or SearchNode()), "draft"
+
         # No nodes in open list; check if we need more diversity
-        evaluated_count = sum(
-            1
-            for n in self.all_nodes.values()
-            if n.status == "evaluated"
-        )
         max_nodes = getattr(exec_spec.search, "max_nodes", 100)
         if len(self.all_nodes) < max_nodes:
             # Return a sentinel to trigger drafting
@@ -464,15 +467,22 @@ class SearchManager:
             logger.info("Terminating: max nodes %d reached", max_nodes)
             return True
 
+        # Budget exceeded check (exit code 12)
+        pruning_cfg = getattr(exec_spec, "pruning", None)
+        budget_cfg = getattr(pruning_cfg, "budget_limit", None) if pruning_cfg else None
+        budget_limit = getattr(budget_cfg, "limit", None) if budget_cfg else None
+        if budget_limit is not None:
+            total_cost = sum(n.total_cost for n in self.all_nodes.values())
+            if total_cost > budget_limit:
+                logger.info("Terminating: budget exceeded (%.1f > %.1f)", total_cost, budget_limit)
+                self._budget_exceeded = True
+                return True
+
         # No open nodes: check if there's still work to do
         if not self.open_list and self.step > 0:
-            pending = sum(
-                1 for n in self.all_nodes.values() if n.status == "pending"
-            )
+            pending = sum(1 for n in self.all_nodes.values() if n.status == "pending")
             debuggable = sum(
-                1
-                for n in self.all_nodes.values()
-                if n.status == "failed" and n.node_id not in self.closed_set
+                1 for n in self.all_nodes.values() if n.status == "failed" and n.node_id not in self.closed_set
             )
             # Can still draft or improve if under max_nodes
             can_expand = len(self.all_nodes) < max_nodes
@@ -483,17 +493,43 @@ class SearchManager:
         return False
 
     def _update_best(self, node: SearchNode) -> None:
-        """Update best_node if node has higher LCB (with mu as tiebreaker)."""
+        """Update best_node if node has higher LCB (with secondary metric tiebreaker)."""
         if node.lcb is None or not node.feasible:
             return
         if self.best_node is None or self.best_node.lcb is None:
             self.best_node = node
         elif node.lcb > self.best_node.lcb:
             self.best_node = node
-        elif node.lcb == self.best_node.lcb and (node.mu or 0) > (self.best_node.mu or 0):
-            self.best_node = node
         else:
-            return
+            # When LCBs are close (within plateau_min_improvement), compare secondary metrics
+            plateau_min = getattr(getattr(self.specs.execution, "termination", None), "plateau_min_improvement", 0.001)
+            if abs(node.lcb - self.best_node.lcb) < plateau_min:
+                # Try secondary metrics tiebreaker
+                secondary = getattr(self.specs, "problem", None)
+                secondary_metrics = getattr(secondary, "secondary_metrics", []) if secondary else []
+                if secondary_metrics and node.metrics_raw and self.best_node.metrics_raw:
+                    for sm in secondary_metrics:
+                        sm_name = getattr(sm, "name", "")
+                        sm_dir = getattr(sm, "direction", "maximize")
+                        node_val = node.metrics_raw[-1].get(sm_name) if isinstance(node.metrics_raw[-1], dict) else None
+                        best_val = (
+                            self.best_node.metrics_raw[-1].get(sm_name)
+                            if isinstance(self.best_node.metrics_raw[-1], dict)
+                            else None
+                        )
+                        if node_val is not None and best_val is not None:
+                            if sm_dir == "maximize" and float(node_val) > float(best_val):
+                                self.best_node = node
+                                break
+                            elif sm_dir == "minimize" and float(node_val) < float(best_val):
+                                self.best_node = node
+                                break
+                elif (node.mu or 0) > (self.best_node.mu or 0):
+                    self.best_node = node
+                else:
+                    return
+            else:
+                return
         logger.info(
             "New best node: %s (LCB=%.4f, mu=%.4f)",
             node.node_id[:8],
@@ -541,13 +577,9 @@ class SearchManager:
         """Serialize state for checkpoint."""
         return {
             "step": self.step,
-            "all_nodes": {
-                nid: node.to_dict() for nid, node in self.all_nodes.items()
-            },
+            "all_nodes": {nid: node.to_dict() for nid, node in self.all_nodes.items()},
             "closed_set": list(self.closed_set),
-            "best_node_id": (
-                self.best_node.node_id if self.best_node else None
-            ),
+            "best_node_id": (self.best_node.node_id if self.best_node else None),
             "open_list": list(self.open_list),
             "ppo_buffer": self.ppo_buffer,
         }
@@ -555,10 +587,7 @@ class SearchManager:
     def load_state(self, state: dict) -> None:
         """Restore state from checkpoint."""
         self.step = state.get("step", 0)
-        self.all_nodes = {
-            nid: SearchNode.from_dict(d)
-            for nid, d in state.get("all_nodes", {}).items()
-        }
+        self.all_nodes = {nid: SearchNode.from_dict(d) for nid, d in state.get("all_nodes", {}).items()}
         self.closed_set = set(state.get("closed_set", []))
         self.open_list = state.get("open_list", [])
         self.ppo_buffer = state.get("ppo_buffer", [])

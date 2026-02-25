@@ -67,8 +67,11 @@ def run_replay(node_id: str, seed: int, work_dir: str) -> None:
         compute = rs.get("compute", {})
         executor_type = compute.get("executor_type", "local")
         if executor_type == "slurm":
-            slurm_cfg = rs.get("slurm", {})
+            # slurm config is nested under compute (new format),
+            # fall back to top-level slurm (old format)
+            slurm_cfg = compute.get("slurm") or rs.get("slurm", {})
             from sera.specs.resource_spec import ComputeConfig
+
             compute_cfg = ComputeConfig(**compute)
 
     if executor_type == "slurm" and slurm_cfg is not None:

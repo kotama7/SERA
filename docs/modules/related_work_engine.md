@@ -105,6 +105,26 @@ Phase 0 パイプライン全体を実行する非同期メソッド。
    - `ClusterSpec` リストを生成
    - `RelatedWorkSpec`（papers, clusters, scores, baseline_candidates, common_metrics, open_problems）を構築
    - `TeacherPaperSet` として上位 `teacher_papers` 件を設定
+   - **教師論文メタデータ分析** (`_analyze_teacher_papers`): LLM を使用して各教師論文のアブストラクトから構造的メタデータを推論
+
+### 教師論文メタデータ分析 (_analyze_teacher_papers)
+
+各教師論文に対して LLM を呼び出し、以下のフィールドを推論する:
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `role` | `str` | `"structure_reference"` / `"method_reference"` / `"both"` |
+| `sections` | `list[str]` | 推定されるセクション見出しリスト |
+| `figure_count` | `int` | 推定される図の数 |
+| `table_count` | `int` | 推定される表の数 |
+| `experiment_style` | `str` | 実験スタイル（例: `"ablation-heavy"`, `"benchmark-comparison"`） |
+| `stats_format` | `str` | 統計の表示形式（例: `"mean±std"`, `"median [IQR]"`） |
+
+LLM が利用不可または失敗した場合はデフォルト値（`role="structure_reference"`, 空リスト/0/空文字列）が使用される。
+
+推論結果は `TeacherPaperSet.teacher_paper_metadata` フィールド（`list[dict]`）に格納され、`structure_summary` の計算（平均セクション数、平均図数等）にも使用される。
+
+`phase0_cmd.py` は `teacher_paper_metadata` を参照して `TeacherPaperSetModel.teacher_papers`（Pydantic モデル）に変換する際、全フィールド（role, sections, figure_count, table_count, experiment_style, stats_format）を正しく引き渡す。
 
 ### RelatedWorkSpec の追加フィールド
 

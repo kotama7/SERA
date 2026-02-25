@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -13,10 +14,10 @@ class TeacherPaper(BaseModel):
 
     paper_id: str = Field(..., description="Unique paper identifier")
     title: str = Field(..., description="Paper title")
-    role: str = Field("exemplar", description="Role, e.g. 'exemplar', 'negative_example'")
-    sections: list[str] = Field(
-        default_factory=list, description="Section headings in the paper"
+    role: Literal["structure_reference", "method_reference", "both"] = Field(
+        "structure_reference", description="Role of this teacher paper"
     )
+    sections: list[str] = Field(default_factory=list, description="Section headings in the paper")
     figure_count: int = Field(0, description="Number of figures")
     table_count: int = Field(0, description="Number of tables")
     experiment_style: str = Field("", description="Style of experiments, e.g. 'ablation-heavy'")
@@ -29,23 +30,16 @@ class StructureSummary(BaseModel):
     avg_sections: float = Field(0.0, description="Average number of sections")
     avg_figures: float = Field(0.0, description="Average number of figures")
     avg_tables: float = Field(0.0, description="Average number of tables")
-    common_experiment_pattern: str = Field(
-        "", description="Most common experiment pattern"
-    )
-    common_stats_format: str = Field(
-        "", description="Most common statistics format"
-    )
+    common_experiment_pattern: str = Field("", description="Most common experiment pattern")
+    common_stats_format: str = Field("", description="Most common statistics format")
 
 
 class TeacherPaperSetModel(BaseModel):
     """Collection of teacher papers and a structural summary."""
 
-    selection_criteria: str = Field(
-        "", description="How these teacher papers were selected"
-    )
-    teacher_papers: list[TeacherPaper] = Field(
-        default_factory=list, description="The teacher papers"
-    )
+    selection_criteria: str = Field("", description="How these teacher papers were selected")
+    teacher_papers: list[TeacherPaper] = Field(default_factory=list, description="The teacher papers")
+    datasets: list[dict] = Field(default_factory=list, description="Dataset information extracted from teacher papers")
     structure_summary: StructureSummary = Field(
         default_factory=StructureSummary, description="Aggregated structure summary"
     )

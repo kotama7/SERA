@@ -107,6 +107,21 @@ def _eval_paper_score_delta(node: Any, parent: Any | None, all_nodes: dict[str, 
     return 0.0
 
 
+@_register_evaluator("writing_quality")
+def _eval_writing_quality(node: Any, parent: Any | None, all_nodes: dict[str, Any]) -> float:
+    """Phase 7: score based on writing quality indicators."""
+    # Uses hypothesis/rationale length and structure as a proxy
+    hypothesis = getattr(node, "hypothesis", "")
+    rationale = getattr(node, "rationale", "")
+    text = f"{hypothesis} {rationale}"
+    if not text.strip():
+        return 0.0
+    # Longer, more structured text scores higher
+    word_count = len(text.split())
+    score = min(1.0, word_count / 50.0)
+    return score
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -121,8 +136,13 @@ class TurnRewardEvaluator:
         Specification mapping phase keys to evaluator names and weights.
     """
 
-    def __init__(self, turn_reward_spec: Any) -> None:
+    def __init__(self, turn_reward_spec: Any, log_path: Any = None) -> None:
         self.turn_reward_spec = turn_reward_spec
+        self._logger = None
+        if log_path is not None:
+            from sera.utils.logging import JsonlLogger
+
+            self._logger = JsonlLogger(log_path)
 
     def evaluate_all(
         self,
@@ -156,5 +176,14 @@ class TurnRewardEvaluator:
             except Exception as e:
                 logger.warning("Turn-reward evaluator %r failed for phase %r: %s", evaluator_name, phase_key, e)
                 results[phase_key] = 0.0
+
+        if self._logger and results:
+            self._logger.log(
+                {
+                    "event": "turn_reward",
+                    "node_id": getattr(node, "node_id", ""),
+                    "rewards": results,
+                }
+            )
 
         return results

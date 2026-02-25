@@ -1,13 +1,23 @@
 """SERA CLI - Self-Evolving Research Agent."""
+
 import typer
 
+from sera.utils.logging import setup_structlog
+
 app = typer.Typer(name="sera", help="Self-Evolving Research Agent")
+
+
+@app.callback()
+def main_callback():
+    """Initialize structured logging on CLI startup."""
+    setup_structlog()
 
 
 @app.command()
 def init(input1_path: str, work_dir: str = "./sera_workspace"):
     """Input-1 を読み込み、workspace を初期化"""
     from sera.commands.init_cmd import run_init
+
     run_init(input1_path, work_dir)
 
 
@@ -22,6 +32,7 @@ def phase0_related_work(
 ):
     """Phase 0: 先行研究収集"""
     from sera.commands.phase0_cmd import run_phase0
+
     run_phase0(work_dir, topk, teacher_papers, citation_depth, years_bias, api_priority)
 
 
@@ -59,9 +70,20 @@ def freeze_specs(
     gpu_required: bool = True,
     timeout: int = 3600,
     no_web: bool = False,
+    strategy: str = "best_first",
+    squash_depth: int = 6,
+    no_snapshot_topk: bool = False,
+    api_priority: str = "semantic_scholar,crossref,arxiv,web",
+    no_turn_rewards: bool = False,
+    turn_w_phase0: float = 0.15,
+    turn_w_phase2: float = 0.25,
+    turn_w_phase3: float = 0.20,
+    turn_w_phase5: float = 0.20,
+    turn_w_phase7: float = 0.20,
 ):
     """Phase 1: 全Spec確定、ExecutionSpec固定"""
     from sera.commands.phase1_cmd import run_freeze_specs
+
     run_freeze_specs(work_dir, auto, locals())
 
 
@@ -74,6 +96,7 @@ def research(
 ):
     """Phase 2-6: 研究ループ"""
     from sera.commands.research_cmd import run_research
+
     run_research(work_dir, resume, skip_phase0=skip_phase0, skip_paper=skip_paper)
 
 
@@ -81,6 +104,7 @@ def research(
 def export_best(work_dir: str = "./sera_workspace"):
     """best成果物を outputs/best/ に集約"""
     from sera.commands.export_cmd import run_export_best
+
     run_export_best(work_dir)
 
 
@@ -88,6 +112,7 @@ def export_best(work_dir: str = "./sera_workspace"):
 def generate_paper(work_dir: str = "./sera_workspace"):
     """Phase 7: 論文生成"""
     from sera.commands.paper_cmd import run_generate_paper
+
     run_generate_paper(work_dir)
 
 
@@ -95,6 +120,7 @@ def generate_paper(work_dir: str = "./sera_workspace"):
 def evaluate_paper(work_dir: str = "./sera_workspace"):
     """Phase 8: 論文評価・改善ループ"""
     from sera.commands.paper_cmd import run_evaluate_paper
+
     run_evaluate_paper(work_dir)
 
 
@@ -102,6 +128,7 @@ def evaluate_paper(work_dir: str = "./sera_workspace"):
 def status(work_dir: str = "./sera_workspace"):
     """現在の探索状態サマリ表示"""
     from sera.commands.status_cmd import run_status
+
     run_status(work_dir)
 
 
@@ -109,13 +136,19 @@ def status(work_dir: str = "./sera_workspace"):
 def show_node(node_id: str, work_dir: str = "./sera_workspace"):
     """ノード詳細表示"""
     from sera.commands.status_cmd import run_show_node
+
     run_show_node(node_id, work_dir)
 
 
 @app.command()
-def replay(node_id: str, seed: int, work_dir: str = "./sera_workspace"):
+def replay(
+    node_id: str = typer.Option(..., "--node-id", help="Node ID to replay"),
+    seed: int = typer.Option(..., "--seed", help="Random seed for replay"),
+    work_dir: str = "./sera_workspace",
+):
     """特定ノードの実験再実行"""
     from sera.commands.replay_cmd import run_replay
+
     run_replay(node_id, seed, work_dir)
 
 
@@ -123,6 +156,7 @@ def replay(node_id: str, seed: int, work_dir: str = "./sera_workspace"):
 def validate_specs(work_dir: str = "./sera_workspace"):
     """Spec整合性チェック"""
     from sera.commands.validate_cmd import run_validate_specs
+
     run_validate_specs(work_dir)
 
 
@@ -136,7 +170,20 @@ def setup(
 ):
     """対話型セットアップウィザード"""
     from sera.commands.setup_cmd import run_setup
+
     run_setup(work_dir, resume, from_input1, skip_phase0, lang)
+
+
+@app.command()
+def visualize(
+    work_dir: str = "./sera_workspace",
+    step: int | None = None,
+    output: str | None = None,
+):
+    """探索木の可視化HTML生成"""
+    from sera.commands.visualize_cmd import run_visualize
+
+    run_visualize(work_dir, step=step, output=output)
 
 
 if __name__ == "__main__":

@@ -151,6 +151,41 @@ def compute_reward_mt_grpo(
 # ---------------------------------------------------------------------------
 
 
+@register_reward_method("tool_aware")
+def compute_reward_tool_aware_dispatch(
+    node: Any,
+    plan_spec: Any,
+    exec_spec: Any,
+    kl_divergence: float = 0.0,
+    **kw: Any,
+) -> float:
+    """Compute reward with tool usage efficiency adjustment.
+
+    First computes the base reward using ``mt_grpo`` (or ``outcome_rm``
+    as fallback), then adjusts for tool efficiency and failure penalties
+    using :func:`~sera.learning.tool_usage_learning.compute_reward_tool_aware`.
+    """
+    from sera.learning.tool_usage_learning import ToolCallRecord, compute_reward_tool_aware
+
+    base = compute_reward_mt_grpo(node, plan_spec, exec_spec, kl_divergence, **kw)
+    tool_records: list[ToolCallRecord] = kw.get("tool_records", [])
+    if not tool_records:
+        return base
+
+    tool_cfg = getattr(plan_spec, "reward", None)
+    budget = getattr(tool_cfg, "tool_call_budget", 20) if tool_cfg else 20
+    eff_coef = getattr(tool_cfg, "efficiency_coef", 0.01) if tool_cfg else 0.01
+    fail_coef = getattr(tool_cfg, "failure_penalty_coef", 0.05) if tool_cfg else 0.05
+
+    return compute_reward_tool_aware(
+        base_reward=base,
+        tool_records=tool_records,
+        tool_call_budget=budget,
+        efficiency_coef=eff_coef,
+        failure_penalty_coef=fail_coef,
+    )
+
+
 @register_reward_method("hiper")
 def compute_reward_hiper(
     node: Any,
@@ -240,9 +275,9 @@ def _count_violated_constraints(node: Any) -> int:
 def _get_budget_limit(exec_spec: Any) -> float:
     """Return the budget limit for cost normalisation."""
     term = getattr(exec_spec, "termination", None)
-    if term and hasattr(term, "max_wall_time_hours"):
+    if term and hasattr(term, "max_wall_time_hours") and term.max_wall_time_hours is not None:
         return term.max_wall_time_hours * 3600.0
-    if term and hasattr(term, "max_wallclock_hours"):
+    if term and hasattr(term, "max_wallclock_hours") and term.max_wallclock_hours is not None:
         return term.max_wallclock_hours * 3600.0
     return 14400.0  # 4 hours in seconds as default
 

@@ -51,16 +51,8 @@ def check_feasibility(node: Any, problem_spec: Any) -> bool:
     for constraint in constraints:
         c_name = constraint.name if hasattr(constraint, "name") else constraint["name"]
         c_type = constraint.type if hasattr(constraint, "type") else constraint["type"]
-        c_threshold = (
-            constraint.threshold
-            if hasattr(constraint, "threshold")
-            else constraint.get("threshold")
-        )
-        c_epsilon = (
-            constraint.epsilon
-            if hasattr(constraint, "epsilon")
-            else constraint.get("epsilon", 0.0)
-        )
+        c_threshold = constraint.threshold if hasattr(constraint, "threshold") else constraint.get("threshold")
+        c_epsilon = constraint.epsilon if hasattr(constraint, "epsilon") else constraint.get("epsilon", 0.0)
 
         # Check constraint against each metric run
         for metric in node.metrics_raw:
@@ -86,8 +78,7 @@ def check_feasibility(node: Any, problem_spec: Any) -> bool:
                 if c_threshold is not None:
                     if float(value) < float(c_threshold) - float(c_epsilon):
                         logger.info(
-                            "Node %s violates ge constraint '%s': "
-                            "%s < %s (epsilon=%s)",
+                            "Node %s violates ge constraint '%s': %s < %s (epsilon=%s)",
                             getattr(node, "node_id", "?")[:8],
                             c_name,
                             value,
@@ -100,8 +91,20 @@ def check_feasibility(node: Any, problem_spec: Any) -> bool:
                 if c_threshold is not None:
                     if float(value) > float(c_threshold) + float(c_epsilon):
                         logger.info(
-                            "Node %s violates le constraint '%s': "
-                            "%s > %s (epsilon=%s)",
+                            "Node %s violates le constraint '%s': %s > %s (epsilon=%s)",
+                            getattr(node, "node_id", "?")[:8],
+                            c_name,
+                            value,
+                            c_threshold,
+                            c_epsilon,
+                        )
+                        return False
+
+            elif c_type == "eq":
+                if c_threshold is not None:
+                    if abs(float(value) - float(c_threshold)) > float(c_epsilon):
+                        logger.info(
+                            "Node %s violates eq constraint '%s': |%s - %s| > epsilon=%s",
                             getattr(node, "node_id", "?")[:8],
                             c_name,
                             value,

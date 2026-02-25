@@ -1,0 +1,144 @@
+prompts:
+  draft:
+    description: "Brainstorm new research approaches (TEMPLATE_REGISTRY version)"
+    template: |-
+      You are a creative research scientist brainstorming new approaches.
+
+      ## Research Context
+      Title: {title}
+      Hypothesis: {hypothesis}
+      Task: {task_brief}
+      Goal: {goal_objective} ({goal_direction})
+      Domain: {field} / {subfield}
+
+      ## Current Best Approach
+      Score: {best_score}
+      Description: {best_approach_description}
+
+      ## Related Work Insights
+      {related_work_insights}
+
+      ## Previous Approaches Tried
+      {previous_approaches_summary}
+
+      ## Instructions
+      Propose a NEW research approach that is substantively different from all previous attempts. Your proposal should:
+      1. Clearly describe the method and its novelty.
+      2. Explain why it might outperform the current best.
+      3. Identify potential risks or failure modes.
+      4. Be implementable within the given resource constraints.
+
+      Return as JSON:
+      {{
+        "approach_name": "<concise name>",
+        "description": "<detailed description of the approach>",
+        "novelty": "<what makes this different from prior work>",
+        "expected_advantage": "<why this might work better>",
+        "risks": ["<risk1>", "<risk2>"],
+        "implementation_notes": "<key implementation details>"
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  debug:
+    description: "Debug failed experiment (TEMPLATE_REGISTRY version)"
+    template: |-
+      You are an expert debugging assistant analyzing a failed experiment.
+
+      ## Experiment Context
+      Approach: {approach_name}
+      Description: {approach_description}
+
+      ## Error Information
+      Error type: {error_type}
+      Error message: {error_message}
+      Traceback:
+      ```
+      {traceback}
+      ```
+
+      ## Code That Failed
+      ```{code_block_tag}
+      {failed_code}
+      ```
+
+      ## Execution Log (last 50 lines)
+      ```
+      {execution_log}
+      ```
+
+      ## Instructions
+      Diagnose the root cause of this failure and provide a fix. Your response should:
+      1. Identify the root cause (not just the symptom).
+      2. Explain why the error occurred.
+      3. Provide the corrected code.
+      4. Suggest any defensive measures to prevent similar issues.
+
+      Return as JSON:
+      {{
+        "root_cause": "<diagnosis of what went wrong>",
+        "explanation": "<why this happened>",
+        "fix_description": "<what the fix does>",
+        "corrected_code": "<the full corrected Python code>",
+        "preventive_measures": ["<measure1>", "<measure2>"]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  improve:
+    description: "Propose atomic improvement (TEMPLATE_REGISTRY version)"
+    template: |-
+      You are an expert ML researcher tasked with making an atomic improvement to an existing approach.
+
+      ## Research Context
+      Title: {title}
+      Task: {task_brief}
+      Goal: {goal_objective} ({goal_direction})
+      Primary Metric: {primary_metric}
+
+      ## Current Approach
+      Name: {approach_name}
+      Description: {approach_description}
+      Current Score ({primary_metric}): {current_score}
+
+      ## Current Code
+      ```python
+      {current_code}
+      ```
+
+      ## Experiment Log (recent results)
+      {experiment_log}
+
+      ## Lineage Context
+      Parent node: {parent_node_id}
+      Generation: {generation}
+      Improvements already tried on this branch: {tried_improvements}
+
+      ## Related Work Hints
+      {related_work_hints}
+
+      ## Instructions
+      Propose exactly ONE atomic improvement to the current approach. An atomic improvement is a single, well-defined change that can be independently evaluated. Examples:
+      - Change learning rate schedule from cosine to warm-restart
+      - Add label smoothing with epsilon=0.1
+      - Replace ReLU activations with GELU
+      - Add gradient clipping at max_norm=1.0
+      - Increase model depth by 1 layer
+
+      Do NOT propose multiple changes bundled together. The improvement must be:
+      1. Minimal: change as little as possible.
+      2. Testable: the effect can be measured by re-running the experiment.
+      3. Justified: backed by reasoning or literature evidence.
+
+      Return as JSON:
+      {{
+        "improvement_name": "<concise name for this change>",
+        "category": "<hyperparameter|architecture|regularization|data_augmentation|optimization|other>",
+        "description": "<what exactly changes and why>",
+        "justification": "<reasoning or evidence supporting this change>",
+        "expected_effect": "<predicted impact on {primary_metric}>",
+        "modified_code": "<the full modified Python code with the improvement applied>",
+        "rollback_description": "<how to undo this change if it hurts performance>"
+      }}
+
+      Output ONLY the JSON, no other text.

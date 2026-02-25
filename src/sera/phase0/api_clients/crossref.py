@@ -68,6 +68,9 @@ def _parse_item(item: dict) -> PaperResult | None:
 class CrossRefClient(BaseScholarClient):
     """Async client for the CrossRef REST API."""
 
+    API_NAME = "crossref"
+    ENDPOINT_URL = "https://api.crossref.org/works"
+
     def __init__(self, email: str | None = None) -> None:
         params: dict[str, str] = {}
         if email:
@@ -80,6 +83,7 @@ class CrossRefClient(BaseScholarClient):
         query: str,
         limit: int = 20,
         year_from: int | None = None,
+        offset: int = 0,
     ) -> list[PaperResult]:
         params: dict[str, str | int] = {
             **self._default_params,
@@ -89,6 +93,8 @@ class CrossRefClient(BaseScholarClient):
         }
         if year_from is not None:
             params["filter"] = f"from-pub-date:{year_from}"
+        if offset > 0:
+            params["offset"] = offset
 
         resp = await self._client.get(BASE_URL, params=params)
         resp.raise_for_status()
@@ -102,14 +108,10 @@ class CrossRefClient(BaseScholarClient):
                 results.append(paper)
         return results
 
-    async def get_references(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_references(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         # CrossRef does not provide a convenient references-graph endpoint.
         return []
 
-    async def get_citations(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_citations(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         # CrossRef does not provide a convenient citations-graph endpoint.
         return []

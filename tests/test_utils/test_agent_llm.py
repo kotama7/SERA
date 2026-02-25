@@ -43,9 +43,7 @@ def _make_model_spec(provider="local"):
 
 def _make_resource_spec():
     """Create a minimal resource_spec-like object for testing."""
-    return SimpleNamespace(
-        api_keys=SimpleNamespace(openai="OPENAI_API_KEY", anthropic="ANTHROPIC_API_KEY")
-    )
+    return SimpleNamespace(api_keys=SimpleNamespace(openai="OPENAI_API_KEY", anthropic="ANTHROPIC_API_KEY"))
 
 
 @pytest.fixture
@@ -98,9 +96,7 @@ class TestAgentLLMMock:
         """generate() works with adapter_node_id when mock is set."""
         agent_llm.set_mock(lambda p, pu: "adapted")
 
-        result = await agent_llm.generate(
-            "test", purpose="adapt_test", adapter_node_id="node-42"
-        )
+        result = await agent_llm.generate("test", purpose="adapt_test", adapter_node_id="node-42")
         assert result == "adapted"
 
     async def test_mock_with_temperature_and_max_tokens(self, agent_llm):
@@ -165,7 +161,7 @@ class TestAgentLLMLogging:
         entry = entries[0]
         assert entry["prompt_hash"].startswith("sha256:")
         assert entry["response_hash"].startswith("sha256:")
-        assert len(entry["prompt_hash"]) == len("sha256:") + 16
+        assert len(entry["prompt_hash"]) == len("sha256:") + 64
 
     async def test_multiple_calls_logged(self, agent_llm):
         """Multiple generate() calls are all logged."""
@@ -244,9 +240,7 @@ class TestAgentLLMVLLMIntegration:
     def test_no_inference_attr_defaults_to_transformers(self, tmp_path, mock_resource_spec):
         """When model_spec has no inference attribute, defaults to transformers."""
         spec = SimpleNamespace(
-            agent_llm=SimpleNamespace(
-                provider="local", model_id="test", temperature=0.7, max_tokens=512
-            ),
+            agent_llm=SimpleNamespace(provider="local", model_id="test", temperature=0.7, max_tokens=512),
             base_model=SimpleNamespace(id="test", revision=None, dtype="fp32", load_method="none"),
             adapter_spec=SimpleNamespace(rank=8, alpha=16, target_modules=["q_proj"], dropout=0.05, init="zero"),
         )
@@ -440,6 +434,4 @@ class TestPromptTemplates:
         ]
         for name in json_templates:
             template = TEMPLATE_REGISTRY[name]
-            assert "JSON" in template or "json" in template, (
-                f"Template '{name}' should mention JSON output format"
-            )
+            assert "JSON" in template or "json" in template, f"Template '{name}' should mention JSON output format"

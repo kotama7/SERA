@@ -1,4 +1,5 @@
 """Structured logging utilities for SERA."""
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ import structlog
 
 class JsonlLogger:
     """Append-only JSONL logger."""
+
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -29,13 +31,14 @@ class JsonlLogger:
 
 
 def setup_structlog() -> None:
-    """Configure structlog with Rich and JSONL output."""
+    """Configure structlog with JSON output for structured logging."""
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.StackInfoRenderer(),
-            structlog.dev.ConsoleRenderer(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(0),
         context_class=dict,

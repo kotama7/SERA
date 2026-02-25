@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DataConfig(BaseModel):
@@ -14,12 +14,22 @@ class DataConfig(BaseModel):
 
     description: str = Field(..., description="Human-readable description of the dataset")
     location: str = Field(..., description="Path or URL to the dataset")
-    format: Literal["csv", "json", "parquet", "code", "pdf", "mixed"] = Field(
-        ..., description="Primary data format"
-    )
+    format: Literal["csv", "json", "parquet", "code", "pdf", "mixed"] = Field(..., description="Primary data format")
     size_hint: str = Field(
-        "", description="Approximate size, e.g. '10k rows', '500 MB'"
+        "", description="Approximate size: 'small(<1GB)', 'medium(1-100GB)', 'large(>100GB)', or free text"
     )
+
+    @field_validator("size_hint", mode="before")
+    @classmethod
+    def _validate_size_hint(cls, v: str) -> str:
+        """Accept canonical size hints and free-form text."""
+        if not v:
+            return v
+        canonical = {"small(<1GB)", "medium(1-100GB)", "large(>100GB)"}
+        if v in canonical:
+            return v
+        # Allow free-form text for backward compatibility
+        return v
 
 
 class DomainConfig(BaseModel):
@@ -42,9 +52,7 @@ class GoalConfig(BaseModel):
     """The optimisation objective."""
 
     objective: str = Field(..., description="What to optimise, e.g. 'BLEU score on test set'")
-    direction: Literal["minimize", "maximize"] = Field(
-        ..., description="Whether lower or higher is better"
-    )
+    direction: Literal["minimize", "maximize"] = Field(..., description="Whether lower or higher is better")
     baseline: str = Field("", description="Optional baseline value or method name")
 
 
@@ -52,12 +60,8 @@ class ConstraintInput(BaseModel):
     """A single constraint the solution must satisfy."""
 
     name: str = Field(..., description="Constraint identifier")
-    type: Literal["ge", "le", "eq", "bool"] = Field(
-        ..., description="Constraint comparison type"
-    )
-    threshold: float | bool | None = Field(
-        None, description="Threshold value (unused for bool type)"
-    )
+    type: Literal["ge", "le", "eq", "bool"] = Field(..., description="Constraint comparison type")
+    threshold: float | bool | None = Field(None, description="Threshold value (unused for bool type)")
 
 
 class Input1Model(BaseModel):
@@ -68,9 +72,7 @@ class Input1Model(BaseModel):
     domain: DomainConfig
     task: TaskConfig
     goal: GoalConfig
-    constraints: list[ConstraintInput] = Field(
-        default_factory=list, description="Hard constraints on the solution"
-    )
+    constraints: list[ConstraintInput] = Field(default_factory=list, description="Hard constraints on the solution")
     notes: str = Field("", description="Free-form notes for the agent")
 
     # -- YAML helpers ----------------------------------------------------------

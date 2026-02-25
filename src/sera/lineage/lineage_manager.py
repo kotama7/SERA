@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -99,16 +101,21 @@ class LineageManager:
         }
         save_file(clean_tensors, str(delta_path))
 
+        # Compute L2 norm of delta tensors
+        delta_norm_l2 = math.sqrt(sum(v.float().pow(2).sum().item() for v in delta_tensors.values()))
+
         # Save metadata
         meta = {
             "adapter_node_id": adapter_node_id,
-            "parent_id": parent_id,
+            "parent_adapter_node_id": parent_id,
             "search_node_id": search_node_id,
             "depth": depth,
             "adapter_spec_hash": adapter_spec_hash,
             "is_snapshot": False,
             "tensor_names": list(delta_tensors.keys()),
             "tensor_shapes": {k: list(v.shape) for k, v in delta_tensors.items()},
+            "delta_norm_l2": delta_norm_l2,
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         meta_path = node_dir / "meta.json"
         with open(meta_path, "w") as f:
@@ -155,6 +162,13 @@ class LineageManager:
         # Build lineage path
         path = self.build_lineage_path(adapter_node_id)
 
+        # Check cache for intermediate ancestors (optimization: start from cached ancestor)
+        cached_ancestor_idx = -1
+        for i in range(len(path) - 1, -1, -1):
+            if path[i] in self._cache:
+                cached_ancestor_idx = i
+                break
+
         # Find the deepest snapshot in the path
         snapshot_idx = -1
         for i, nid in enumerate(path):
@@ -162,8 +176,11 @@ class LineageManager:
             if (node_dir / "adapter_snapshot.safetensors").exists():
                 snapshot_idx = i
 
-        # Start accumulation
-        if snapshot_idx >= 0:
+        # Determine best starting point: cached ancestor or deepest snapshot
+        if cached_ancestor_idx >= 0 and cached_ancestor_idx >= snapshot_idx:
+            accumulated = {k: v.clone() for k, v in self._cache[path[cached_ancestor_idx]].items()}
+            remaining_path = path[cached_ancestor_idx + 1:]
+        elif snapshot_idx >= 0:
             snapshot_nid = path[snapshot_idx]
             snapshot_path = self.nodes_dir / snapshot_nid / "adapter_snapshot.safetensors"
             accumulated = {
@@ -193,22 +210,34 @@ class LineageManager:
     # Squash / Snapshot
     # ------------------------------------------------------------------
 
-    def maybe_squash(self, exec_spec: Any) -> list[str]:
+    def maybe_squash(self, exec_spec: Any, top_k_ids: set[str] | None = None) -> list[str]:
         """Create snapshots for nodes that are deeper than the squash threshold.
 
-        The squash threshold defaults to ``max_depth // 2`` from the
-        execution spec's search config, or 5 if not set.
+        The squash threshold is read from ``lora_runtime.squash_depth`` first
+        (default 6), falling back to ``search.squash_depth``.
+
+        Parameters
+        ----------
+        exec_spec : object
+            Execution specification.
+        top_k_ids : set[str] | None
+            Set of adapter_node_ids for top-k nodes. If ``snapshot_on_topk``
+            is enabled and a node is in this set, a snapshot is also created.
 
         Returns
         -------
         list[str]
             List of adapter_node_ids that were squashed.
         """
-        search_cfg = getattr(exec_spec, "search", None)
-        max_depth = getattr(search_cfg, "max_depth", 10) if search_cfg else 10
-        squash_threshold = getattr(search_cfg, "squash_depth", None) if search_cfg else None
+        lora_cfg = getattr(exec_spec, "lora_runtime", None)
+        squash_threshold = getattr(lora_cfg, "squash_depth", None) if lora_cfg else None
         if squash_threshold is None:
-            squash_threshold = max_depth // 2
+            search_cfg = getattr(exec_spec, "search", None)
+            squash_threshold = getattr(search_cfg, "squash_depth", None) if search_cfg else None
+        if squash_threshold is None:
+            squash_threshold = 6
+
+        snapshot_on_topk = getattr(lora_cfg, "snapshot_on_topk", True) if lora_cfg else True
 
         squashed: list[str] = []
         for meta_path in self.nodes_dir.glob("*/meta.json"):
@@ -216,8 +245,15 @@ class LineageManager:
                 meta = json.load(f)
             if meta.get("is_snapshot", False):
                 continue
-            if meta.get("depth", 0) >= squash_threshold:
-                nid = meta["adapter_node_id"]
+
+            nid = meta["adapter_node_id"]
+            should_squash = meta.get("depth", 0) >= squash_threshold
+
+            # Also snapshot top-k nodes if configured
+            if not should_squash and snapshot_on_topk and top_k_ids and nid in top_k_ids:
+                should_squash = True
+
+            if should_squash:
                 self._create_snapshot(nid)
                 squashed.append(nid)
 
@@ -268,7 +304,7 @@ class LineageManager:
                 break
             with open(meta_path) as f:
                 meta = json.load(f)
-            current = meta.get("parent_id")
+            current = meta.get("parent_adapter_node_id")
 
         path.reverse()
         return path

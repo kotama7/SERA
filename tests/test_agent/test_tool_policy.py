@@ -60,9 +60,7 @@ class TestToolPolicy:
         assert ok is True
 
     def test_check_tool_allowed_in_phase(self):
-        policy = ToolPolicy(
-            phase_allowed_tools={"phase0": ["semantic_scholar_search", "arxiv_search"]}
-        )
+        policy = ToolPolicy(phase_allowed_tools={"phase0": ["semantic_scholar_search", "arxiv_search"]})
         ok, _ = policy.check_tool_allowed("semantic_scholar_search", phase="phase0")
         assert ok is True
 

@@ -99,9 +99,7 @@ class TestAgentLoop:
             config=AgentLoopConfig(max_steps=5),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            loop.run("What is the answer?", purpose="test_simple")
-        )
+        result = asyncio.get_event_loop().run_until_complete(loop.run("What is the answer?", purpose="test_simple"))
 
         assert result.exit_reason == "completed"
         assert result.final_output == "The answer is 42."
@@ -138,9 +136,7 @@ class TestAgentLoop:
             config=AgentLoopConfig(max_steps=5),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            loop.run("What was the accuracy?", purpose="test_tool")
-        )
+        result = asyncio.get_event_loop().run_until_complete(loop.run("What was the accuracy?", purpose="test_tool"))
 
         assert result.exit_reason == "completed"
         assert result.total_steps == 2
@@ -167,9 +163,7 @@ class TestAgentLoop:
             config=AgentLoopConfig(max_steps=3, tool_call_budget=100),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            loop.run("Do something", purpose="test_max_steps")
-        )
+        result = asyncio.get_event_loop().run_until_complete(loop.run("Do something", purpose="test_max_steps"))
 
         assert result.exit_reason == "max_steps"
         assert result.total_steps == 3
@@ -192,9 +186,7 @@ class TestAgentLoop:
             config=AgentLoopConfig(max_steps=10, tool_call_budget=2),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            loop.run("Do something", purpose="test_budget")
-        )
+        result = asyncio.get_event_loop().run_until_complete(loop.run("Do something", purpose="test_budget"))
 
         # After first step: 2 tool calls -> budget exhausted on next step
         assert result.exit_reason == "budget_exhausted"
@@ -257,9 +249,7 @@ class TestAgentLoop:
             config=AgentLoopConfig(max_steps=100, timeout_sec=0.001),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            loop.run("Do something", purpose="test_timeout")
-        )
+        result = asyncio.get_event_loop().run_until_complete(loop.run("Do something", purpose="test_timeout"))
 
         # Should eventually exit (either timeout or completed)
         assert result.exit_reason in ("timeout", "completed")
@@ -308,9 +298,7 @@ class TestAgentLoop:
             tool_executor=tool_executor,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            loop.run("Question?", purpose="test_empty_tools")
-        )
+        result = asyncio.get_event_loop().run_until_complete(loop.run("Question?", purpose="test_empty_tools"))
 
         # Empty list is falsy, so should complete
         assert result.exit_reason == "completed"

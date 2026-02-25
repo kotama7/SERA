@@ -13,9 +13,7 @@ class SectionRequirement(BaseModel):
 
     key: str = Field(..., description="Section identifier, e.g. 'introduction'")
     max_words: int | None = Field(None, description="Optional word-count cap")
-    must_contain: list[str] = Field(
-        default_factory=list, description="Phrases/topics the section must cover"
-    )
+    must_contain: list[str] = Field(default_factory=list, description="Phrases/topics the section must cover")
 
 
 class FigureRequirement(BaseModel):
@@ -52,18 +50,45 @@ class PaperSpecModel(BaseModel):
     max_pages: int = Field(12, description="Maximum page count")
     sections_required: list[SectionRequirement] = Field(
         default_factory=lambda: [
-            SectionRequirement(key="abstract"),
-            SectionRequirement(key="introduction"),
-            SectionRequirement(key="related_work"),
-            SectionRequirement(key="method"),
-            SectionRequirement(key="experiments"),
-            SectionRequirement(key="results"),
+            SectionRequirement(key="abstract", max_words=300),
+            SectionRequirement(
+                key="introduction",
+                must_contain=["motivation", "contribution_list", "paper_organization"],
+            ),
+            SectionRequirement(
+                key="related_work",
+                must_contain=["comparison_table"],
+            ),
+            SectionRequirement(
+                key="method",
+                must_contain=["algorithm_pseudocode", "architecture_diagram"],
+            ),
+            SectionRequirement(
+                key="experiments",
+                must_contain=["setup", "baselines", "main_results", "ablation"],
+            ),
+            SectionRequirement(
+                key="results",
+                must_contain=["ci_table", "lcb_comparison"],
+            ),
+            SectionRequirement(
+                key="discussion",
+                must_contain=["limitations", "future_work"],
+            ),
             SectionRequirement(key="conclusion"),
+            SectionRequirement(key="references"),
         ],
         description="Sections that must appear in the paper",
     )
     figures_required: list[FigureRequirement] = Field(
-        default_factory=list, description="Figures that must appear in the paper"
+        default_factory=lambda: [
+            FigureRequirement(type="architecture_diagram", description="Architecture diagram of the proposed method"),
+            FigureRequirement(type="search_tree_visualization", description="Search tree visualization"),
+            FigureRequirement(type="ci_bar_chart", description="CI bar chart comparing methods"),
+            FigureRequirement(type="convergence_curve", description="Convergence curve over search steps"),
+            FigureRequirement(type="ablation_table", description="Ablation study table"),
+        ],
+        description="Figures that must appear in the paper",
     )
     stats_reporting: StatsReporting = Field(
         default_factory=StatsReporting, description="Statistical reporting requirements"

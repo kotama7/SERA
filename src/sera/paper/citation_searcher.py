@@ -90,17 +90,17 @@ class CitationSearcher:
                 "QUERY: <a search query to find the paper>"
             )
 
-            identify_response = await self.agent_llm.generate(
-                prompt=identify_prompt, purpose="citation_identify"
-            )
+            identify_response = await self.agent_llm.generate(prompt=identify_prompt, purpose="citation_identify")
 
             # -- Early exit check ------------------------------------
             if "no more citations needed" in identify_response.lower():
-                self._log_round({
-                    "round": round_idx,
-                    "action": "early_exit",
-                    "reason": "LLM indicated no more citations needed",
-                })
+                self._log_round(
+                    {
+                        "round": round_idx,
+                        "action": "early_exit",
+                        "reason": "LLM indicated no more citations needed",
+                    }
+                )
                 break
 
             # -- Parse claim and query --------------------------------
@@ -109,9 +109,9 @@ class CitationSearcher:
             for line in identify_response.split("\n"):
                 line = line.strip()
                 if line.upper().startswith("CLAIM:"):
-                    claim = line[len("CLAIM:"):].strip()
+                    claim = line[len("CLAIM:") :].strip()
                 elif line.upper().startswith("QUERY:"):
-                    query = line[len("QUERY:"):].strip()
+                    query = line[len("QUERY:") :].strip()
 
             if not query:
                 # Fallback: use the entire response as query
@@ -121,22 +121,23 @@ class CitationSearcher:
             search_results: list[Any] = []
             if self.ss_client is not None:
                 try:
-                    search_results = await self.ss_client.search(
-                        query=query, limit=10
-                    )
+                    search_results = await self.ss_client.search(query=query, limit=10)
                 except Exception as exc:
                     logger.warning(
                         "Semantic Scholar search failed (round %d): %s",
-                        round_idx, exc,
+                        round_idx,
+                        exc,
                     )
 
             if not search_results:
-                self._log_round({
-                    "round": round_idx,
-                    "action": "no_results",
-                    "query": query,
-                    "claim": claim,
-                })
+                self._log_round(
+                    {
+                        "round": round_idx,
+                        "action": "no_results",
+                        "query": query,
+                        "claim": claim,
+                    }
+                )
                 continue
 
             # -- Step 3: Ask LLM to select the best match -------------
@@ -155,26 +156,27 @@ class CitationSearcher:
                 "Respond with just the number, or -1 if none are relevant."
             )
 
-            select_response = await self.agent_llm.generate(
-                prompt=select_prompt, purpose="citation_select"
-            )
+            select_response = await self.agent_llm.generate(prompt=select_prompt, purpose="citation_select")
 
             # Parse selection
             try:
                 # Extract first integer from response
                 import re
+
                 match = re.search(r"-?\d+", select_response)
                 selected_idx = int(match.group()) if match else -1
             except (ValueError, AttributeError):
                 selected_idx = -1
 
             if selected_idx < 0 or selected_idx >= len(search_results):
-                self._log_round({
-                    "round": round_idx,
-                    "action": "no_selection",
-                    "query": query,
-                    "claim": claim,
-                })
+                self._log_round(
+                    {
+                        "round": round_idx,
+                        "action": "no_selection",
+                        "query": query,
+                        "claim": claim,
+                    }
+                )
                 continue
 
             selected = search_results[selected_idx]
@@ -206,15 +208,13 @@ class CitationSearcher:
                 "Return ONLY the BibTeX entry, nothing else."
             )
 
-            bibtex = await self.agent_llm.generate(
-                prompt=bibtex_prompt, purpose="citation_bibtex"
-            )
+            bibtex = await self.agent_llm.generate(prompt=bibtex_prompt, purpose="citation_bibtex")
 
             # Clean up BibTeX
             if "```" in bibtex:
                 bibtex = bibtex.split("```")[1] if "```" in bibtex else bibtex
                 if bibtex.startswith("bibtex"):
-                    bibtex = bibtex[len("bibtex"):]
+                    bibtex = bibtex[len("bibtex") :]
                 bibtex = bibtex.strip()
 
             citation_entry = {
@@ -230,14 +230,16 @@ class CitationSearcher:
             # Update existing bibtex for next round
             existing_bibtex += f"\n{bibtex}"
 
-            self._log_round({
-                "round": round_idx,
-                "action": "citation_found",
-                "query": query,
-                "claim": claim,
-                "citation_key": citation_key,
-                "title": title,
-                "year": year,
-            })
+            self._log_round(
+                {
+                    "round": round_idx,
+                    "action": "citation_found",
+                    "query": query,
+                    "claim": claim,
+                    "citation_key": citation_key,
+                    "title": title,
+                    "year": year,
+                }
+            )
 
         return found_citations

@@ -73,12 +73,11 @@ class TestMainResultsTable:
 
     def test_table_with_nodes(self):
         nodes = [
-            _make_node(node_id="n1", mu=0.90, se=0.01, lcb=0.88,
-                       experiment_config={"method": "Method A"}),
-            _make_node(node_id="n2", mu=0.85, se=0.02, lcb=0.81,
-                       experiment_config={"method": "Method B"}),
-            _make_node(node_id="n3", mu=0.70, se=0.05, lcb=0.60,
-                       experiment_config={"method": "Method C"}, feasible=False),
+            _make_node(node_id="n1", mu=0.90, se=0.01, lcb=0.88, experiment_config={"method": "Method A"}),
+            _make_node(node_id="n2", mu=0.85, se=0.02, lcb=0.81, experiment_config={"method": "Method B"}),
+            _make_node(
+                node_id="n3", mu=0.70, se=0.05, lcb=0.60, experiment_config={"method": "Method C"}, feasible=False
+            ),
         ]
         store = EvidenceStore(all_evaluated_nodes=nodes)
         table = store.get_main_results_table()
@@ -161,9 +160,7 @@ class TestAblationData:
 
     def test_no_ablation_children(self):
         best = _make_node(node_id="best")
-        other = _make_node(
-            node_id="other", parent_id="unrelated", branching_op="improve"
-        )
+        other = _make_node(node_id="other", parent_id="unrelated", branching_op="improve")
         store = EvidenceStore(
             best_node=best,
             all_evaluated_nodes=[best, other],

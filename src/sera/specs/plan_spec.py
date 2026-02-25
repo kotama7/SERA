@@ -53,17 +53,17 @@ class BranchingConfig(BaseModel):
 class RewardConfig(BaseModel):
     """Reward / scoring configuration for tree search."""
 
-    method: Literal["outcome_rm", "mt_grpo", "hiper"] = Field(
+    method: Literal["outcome_rm", "mt_grpo", "tool_aware", "hiper"] = Field(
         "outcome_rm",
-        description="Reward method: outcome_rm (default), mt_grpo (turn-level), hiper (hierarchical)",
+        description="Reward method: outcome_rm (default), mt_grpo (turn-level), tool_aware (tool efficiency), hiper (hierarchical)",
     )
     formula: str = Field(
-        "primary_metric - constraint_penalty",
+        "primary - penalty(constraints) - lambda_cost * cost",
         description="Reward formula (symbolic expression)",
     )
-    primary_source: str = Field("evaluation", description="Where the primary metric comes from")
+    primary_source: str = Field("metrics.primary.value", description="Where the primary metric comes from")
     constraint_penalty: float = Field(10.0, description="Penalty per violated constraint")
-    cost_source: str = Field("wallclock", description="How cost is measured")
+    cost_source: str = Field("metrics.secondary[name='cost'].value", description="How cost is measured")
     kl_penalty: bool = Field(True, description="Whether to apply a KL-divergence penalty")
     kl_coef_in_reward: float = Field(0.01, description="KL penalty coefficient in the reward")
 
@@ -78,8 +78,15 @@ class PhaseRewardConfig(BaseModel):
 class TurnRewardSpec(BaseModel):
     """MT-GRPO / HiPER: turn-level reward specification per phase."""
 
+    enabled: bool = Field(True, description="Enable turn-level reward computation")
     phase_rewards: dict[str, PhaseRewardConfig] = Field(
-        default_factory=dict,
+        default_factory=lambda: {
+            "phase0": PhaseRewardConfig(evaluator="citation_relevance", weight=0.10),
+            "phase2": PhaseRewardConfig(evaluator="hypothesis_novelty", weight=0.15),
+            "phase3": PhaseRewardConfig(evaluator="code_executability", weight=0.25),
+            "phase4": PhaseRewardConfig(evaluator="metric_improvement", weight=0.35),
+            "phase7": PhaseRewardConfig(evaluator="paper_score_delta", weight=0.15),
+        },
         description="Phase-keyed reward evaluators and weights",
     )
 
@@ -139,7 +146,7 @@ class FunctionLoopOverride(BaseModel):
 class ToolsConfig(BaseModel):
     """Tool availability and phase-based restrictions (§5.8.2)."""
 
-    enabled: bool = Field(False, description="Enable tool execution via AgentLoop")
+    enabled: bool = Field(True, description="Enable tool execution via AgentLoop")
     api_rate_limit_per_minute: int = Field(30, description="External API rate limit")
 
     available_tools: dict[str, list[str]] = Field(
@@ -285,7 +292,7 @@ class ToolConfig(BaseModel):
     fields used by existing code (enabled, max_steps_per_loop, etc.).
     """
 
-    enabled: bool = Field(False, description="Enable tool execution via AgentLoop")
+    enabled: bool = Field(True, description="Enable tool execution via AgentLoop")
     max_steps_per_loop: int = Field(10, description="Max ReAct loop steps")
     tool_call_budget_per_loop: int = Field(20, description="Tool call budget per loop")
     observation_max_tokens: int = Field(2000, description="Max tokens per tool observation")

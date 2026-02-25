@@ -53,6 +53,7 @@
 | [21_setup_wizard.md](./21_setup_wizard.md) | 対話型セットアップウィザード | §27 |
 | [22_agent_functions.md](./22_agent_functions.md) | Agent Function System（タスク定義 + 統一エントリポイント） | §28 |
 | [23_tool_execution.md](./23_tool_execution.md) | Tool Execution Engine（ツール実行基盤 + AgentLoop + MCP） | §29 |
+| [24_visualization.md](./24_visualization.md) | 探索木可視化ツール（HTML出力） | §30 |
 
 ---
 

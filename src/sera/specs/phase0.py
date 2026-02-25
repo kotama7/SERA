@@ -8,6 +8,7 @@ produce serialisable output.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -44,7 +45,7 @@ class PaperSpec:
 class ClusterSpec:
     """A thematic cluster of papers."""
 
-    label: str
+    name: str
     description: str = ""
     paper_ids: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
@@ -56,7 +57,7 @@ class BaselineCandidate:
 
     name: str = ""
     paper_id: str = ""
-    reported_metric: str = ""
+    reported_metric: dict[str, Any] = field(default_factory=lambda: {"name": "", "value": 0.0, "scale": ""})
     method_summary: str = ""
 
 
@@ -77,8 +78,9 @@ class RelatedWorkSpec:
     clusters: list[ClusterSpec] = field(default_factory=list)
     scores: list[PaperScoreSpec] = field(default_factory=list)
     baseline_candidates: list[BaselineCandidate] = field(default_factory=list)
-    common_metrics: list[str] = field(default_factory=list)
+    common_metrics: list[dict[str, Any]] = field(default_factory=list)
     open_problems: list[OpenProblem] = field(default_factory=list)
+    common_datasets: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -86,3 +88,5 @@ class TeacherPaperSet:
     """The top-k teacher papers selected for Phase 1."""
 
     papers: list[PaperSpec] = field(default_factory=list)
+    structure_summary: dict[str, Any] = field(default_factory=dict)
+    teacher_paper_metadata: list[dict[str, Any]] = field(default_factory=list)

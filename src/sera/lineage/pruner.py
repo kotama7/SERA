@@ -15,6 +15,8 @@ remove unpromising branches and free resources:
 from __future__ import annotations
 
 import logging
+import shutil
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,7 @@ class Pruner:
         closed_set: set[str],
         all_nodes: dict[str, Any],
         exec_spec: Any,
+        workspace_dir: Path | None = None,
     ) -> list[str]:
         """Run all pruning passes and return the ids of pruned nodes.
 
@@ -59,11 +62,14 @@ class Pruner:
 
         pruned_ids: list[str] = []
 
-        # 1. LCB threshold pruning
-        pruned_ids.extend(self._lcb_threshold_prune(open_list, all_nodes, exec_spec, protected))
+        # 1. Pareto pruning (conditional on pruning.pareto flag)
+        pruning_cfg = getattr(exec_spec, "pruning", None)
+        pareto_enabled = getattr(pruning_cfg, "pareto", True) if pruning_cfg else True
+        if pareto_enabled:
+            pruned_ids.extend(self._pareto_prune(open_list, all_nodes, exec_spec, protected))
 
-        # 2. Pareto pruning
-        pruned_ids.extend(self._pareto_prune(open_list, all_nodes, exec_spec, protected))
+        # 2. LCB threshold pruning
+        pruned_ids.extend(self._lcb_threshold_prune(open_list, all_nodes, exec_spec, protected))
 
         # 3. Budget pruning
         pruned_ids.extend(self._budget_prune(open_list, all_nodes, exec_spec, protected))
@@ -75,6 +81,23 @@ class Pruner:
         for nid in pruned_ids:
             if nid in all_nodes:
                 all_nodes[nid].status = "pruned"
+
+        # Remove pruned nodes from open_list in-place
+        pruned_set = set(pruned_ids)
+        open_list[:] = [n for n in open_list if n.node_id not in pruned_set]
+
+        # Clean up run directories if save_pruned is disabled
+        save_pruned = getattr(pruning_cfg, "save_pruned", True) if pruning_cfg else True
+        if not save_pruned and workspace_dir is not None:
+            runs_dir = workspace_dir / "runs"
+            for nid in pruned_ids:
+                run_dir = runs_dir / nid
+                if run_dir.exists():
+                    try:
+                        shutil.rmtree(run_dir)
+                        logger.info("Cleaned up run directory for pruned node %s", nid)
+                    except Exception as e:
+                        logger.warning("Failed to clean up run dir for %s: %s", nid, e)
 
         if pruned_ids:
             logger.info("Pruned %d nodes: %s", len(pruned_ids), pruned_ids)
@@ -168,11 +191,15 @@ class Pruner:
         best_lcb = max(n.lcb for n in evaluated)
 
         pruning_cfg = getattr(exec_spec, "pruning", None)
+        # Read lcb_threshold (fraction of best LCB) first, fall back to reward_threshold
+        lcb_threshold_frac = getattr(pruning_cfg, "lcb_threshold", None) if pruning_cfg else None
         explicit_threshold = (
             pruning_cfg.reward_threshold if pruning_cfg and hasattr(pruning_cfg, "reward_threshold") else 0.0
         )
 
-        if explicit_threshold != 0.0:
+        if lcb_threshold_frac is not None:
+            threshold = best_lcb * lcb_threshold_frac
+        elif explicit_threshold != 0.0:
             threshold = explicit_threshold
         else:
             # Auto threshold: 50 % of best LCB
@@ -246,9 +273,9 @@ class Pruner:
         14400 seconds.
         """
         term = getattr(exec_spec, "termination", None)
-        if term and hasattr(term, "max_wall_time_hours"):
+        if term and hasattr(term, "max_wall_time_hours") and term.max_wall_time_hours is not None:
             budget = term.max_wall_time_hours * 3600.0
-        elif term and hasattr(term, "max_wallclock_hours"):
+        elif term and hasattr(term, "max_wallclock_hours") and term.max_wallclock_hours is not None:
             budget = term.max_wallclock_hours * 3600.0
         else:
             budget = 14400.0

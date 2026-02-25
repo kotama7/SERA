@@ -67,6 +67,8 @@ class AgentFunction:
     default_temperature: float = 0.7
     max_retries: int = 3
     handler: Callable[..., Any] | None = None
+    allowed_tools: list[str] | None = None
+    loop_config: dict[str, Any] | None = None
 
 
 class AgentFunctionRegistry:
@@ -95,6 +97,10 @@ class AgentFunctionRegistry:
     def list_by_phase(self, phase: str) -> list[AgentFunction]:
         """Return functions belonging to *phase*."""
         return [f for f in self._functions.values() if f.phase == phase]
+
+    def list_by_mode(self, mode: str) -> list[AgentFunction]:
+        """Return functions with matching output_mode value."""
+        return [f for f in self._functions.values() if f.output_mode.value == mode]
 
     # ------------------------------------------------------------------
     # Schema conversion helpers
@@ -166,6 +172,8 @@ def register_function(
     phase: str = "",
     default_temperature: float = 0.7,
     max_retries: int = 3,
+    allowed_tools: list[str] | None = None,
+    loop_config: dict[str, Any] | None = None,
 ) -> Callable:
     """Decorator that registers a handler function in ``REGISTRY``.
 
@@ -189,6 +197,8 @@ def register_function(
             default_temperature=default_temperature,
             max_retries=max_retries,
             handler=fn,
+            allowed_tools=allowed_tools,
+            loop_config=loop_config,
         )
         REGISTRY.register(func)
         return fn

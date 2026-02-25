@@ -1,4 +1,5 @@
 """sera init command implementation."""
+
 from pathlib import Path
 import shutil
 import yaml
@@ -21,6 +22,7 @@ def run_init(input1_path: str, work_dir: str) -> None:
         data = yaml.safe_load(f)
 
     from sera.specs.input1 import Input1Model
+
     try:
         Input1Model(**data)
     except Exception as e:

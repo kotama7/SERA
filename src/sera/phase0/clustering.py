@@ -24,10 +24,7 @@ def _build_cluster_prompt(papers: list[PaperResult]) -> str:
     """Build the prompt that asks the LLM to cluster papers."""
     paper_lines: list[str] = []
     for i, p in enumerate(papers):
-        paper_lines.append(
-            f"{i + 1}. [{p.paper_id}] {p.title} ({p.year or 'n/a'}) "
-            f"- citations: {p.citation_count}"
-        )
+        paper_lines.append(f"{i + 1}. [{p.paper_id}] {p.title} ({p.year or 'n/a'}) - citations: {p.citation_count}")
     papers_text = "\n".join(paper_lines)
 
     return (
@@ -63,9 +60,7 @@ def _parse_clusters_json(raw: str, papers: list[PaperResult]) -> list[Cluster]:
         # Only include paper_ids that exist in our paper list
         paper_ids = [pid for pid in raw_ids if pid in valid_ids]
         if paper_ids:
-            clusters.append(
-                Cluster(label=label, description=description, paper_ids=paper_ids, keywords=keywords)
-            )
+            clusters.append(Cluster(label=label, description=description, paper_ids=paper_ids, keywords=keywords))
     return clusters
 
 

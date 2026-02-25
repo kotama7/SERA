@@ -37,9 +37,11 @@ def _make_node(
     n = SearchNode()
     n.status = status
     n.mu = mu
-    n.metrics_raw = metrics_raw if metrics_raw is not None else [
-        {"name": "primary", "value": 0.85, "direction": "maximize", "primary": True}
-    ]
+    n.metrics_raw = (
+        metrics_raw
+        if metrics_raw is not None
+        else [{"name": "primary", "value": 0.85, "direction": "maximize", "primary": True}]
+    )
     n.total_cost = total_cost
     n.feasible = feasible
     return n

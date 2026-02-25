@@ -41,17 +41,13 @@ class AdapterSpec(BaseModel):
     alpha: int = Field(32, description="LoRA alpha")
     dropout: float = Field(0.05, description="Dropout probability in adapter layers")
     init: str = Field("zero", description="Initialisation strategy for adapter weights")
-    delta_inheritance: bool = Field(
-        True, description="Whether child nodes inherit parent adapter deltas"
-    )
+    delta_inheritance: bool = Field(True, description="Whether child nodes inherit parent adapter deltas")
 
 
 class VLMConfig(BaseModel):
     """Vision-language model configuration (optional)."""
 
-    provider: str | None = Field(
-        None, description="Provider, e.g. 'openai'. None means disabled."
-    )
+    provider: str | None = Field("openai", description="Provider, e.g. 'openai'. None means disabled.")
     model_id: str = Field("gpt-4o", description="VLM model identifier")
     max_tokens: int = Field(4096, description="Maximum tokens per call")
     temperature: float = Field(0.7, description="Sampling temperature")
@@ -123,21 +119,13 @@ class ModelSpecModel(BaseModel):
     """Top-level model specification."""
 
     base_model: BaseModelConfig = Field(
-        default_factory=lambda: BaseModelConfig(id="meta-llama/Llama-3-8B"),
+        default_factory=lambda: BaseModelConfig(id="Qwen/Qwen2.5-Coder-7B-Instruct"),
         description="Base foundation model",
     )
-    agent_llm: AgentLLMConfig = Field(
-        default_factory=AgentLLMConfig, description="Agent LLM configuration"
-    )
-    adapter_spec: AdapterSpec = Field(
-        default_factory=AdapterSpec, description="Adapter / LoRA configuration"
-    )
-    inference: InferenceConfig = Field(
-        default_factory=InferenceConfig, description="Inference engine configuration"
-    )
-    vlm: VLMConfig = Field(
-        default_factory=VLMConfig, description="Vision-language model (optional)"
-    )
+    agent_llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig, description="Agent LLM configuration")
+    adapter_spec: AdapterSpec = Field(default_factory=AdapterSpec, description="Adapter / LoRA configuration")
+    inference: InferenceConfig = Field(default_factory=InferenceConfig, description="Inference engine configuration")
+    vlm: VLMConfig = Field(default_factory=VLMConfig, description="Vision-language model (optional)")
     compatibility: CompatibilityConfig = Field(
         default_factory=CompatibilityConfig, description="Compatibility metadata"
     )

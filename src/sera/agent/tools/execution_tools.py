@@ -33,9 +33,7 @@ async def handle_execute_experiment(
         return {"success": False, "error": f"Script not found: {script_path}"}
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None, lambda: executor.run(node_id, script_path, seed, timeout_sec=timeout)
-    )
+    result = await loop.run_in_executor(None, lambda: executor.run(node_id, script_path, seed, timeout_sec=timeout))
 
     metrics = None
     if result.metrics_path and result.metrics_path.exists():
@@ -74,23 +72,20 @@ async def handle_execute_code_snippet(
     if language != "python":
         return {"success": False, "error": f"Unsupported language: {language}"}
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", dir=str(workspace), delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workspace), delete=False) as f:
         f.write(code)
         tmp_path = Path(f.name)
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "python", str(tmp_path),
+            "python",
+            str(tmp_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
@@ -132,9 +127,7 @@ async def handle_run_shell_command(
         cwd=str(workspace),
     )
     try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()

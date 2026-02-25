@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 # Force non-interactive backend before any pyplot import
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
@@ -45,9 +46,7 @@ class FigureGenerator:
     # CI bar chart
     # ------------------------------------------------------------------
 
-    def ci_bar_chart(
-        self, nodes: list[Any], output_name: str = "ci_bar_chart.png"
-    ) -> Path:
+    def ci_bar_chart(self, nodes: list[Any], output_name: str = "ci_bar_chart.png") -> Path:
         """Matplotlib errorbar chart of mu +/- CI per method.
 
         Parameters
@@ -107,8 +106,7 @@ class FigureGenerator:
         if not data:
             # Produce an empty plot with a note
             fig, ax = plt.subplots(figsize=(7, 4))
-            ax.text(0.5, 0.5, "No convergence data", transform=ax.transAxes,
-                    ha="center", va="center", fontsize=14)
+            ax.text(0.5, 0.5, "No convergence data", transform=ax.transAxes, ha="center", va="center", fontsize=14)
             return self._save(fig, output_name)
 
         steps, lcbs = zip(*data)
@@ -149,9 +147,7 @@ class FigureGenerator:
         try:
             import graphviz  # type: ignore[import-untyped]
         except ImportError:
-            logger.warning(
-                "graphviz Python package not installed; skipping search_tree figure."
-            )
+            logger.warning("graphviz Python package not installed; skipping search_tree figure.")
             return None
 
         dot = graphviz.Digraph(format="png")
@@ -210,8 +206,7 @@ class FigureGenerator:
 
         if not data:
             fig, ax = plt.subplots(figsize=(6, 3))
-            ax.text(0.5, 0.5, "No ablation data", transform=ax.transAxes,
-                    ha="center", va="center", fontsize=14)
+            ax.text(0.5, 0.5, "No ablation data", transform=ax.transAxes, ha="center", va="center", fontsize=14)
             ax.axis("off")
             return self._save(fig, output_name)
 
@@ -287,9 +282,7 @@ class FigureGenerator:
             f"Evidence:\n{context}"
         )
 
-        code_response = await agent_llm.generate(
-            prompt=prompt, purpose="aggregate_plot_generation"
-        )
+        code_response = await agent_llm.generate(prompt=prompt, purpose="aggregate_plot_generation")
 
         # Try to parse the LLM response as JSON
         try:
@@ -336,9 +329,7 @@ class FigureGenerator:
                         f"Error: {exc}\n"
                         f"Fix the code and return ONLY the corrected Python code."
                     )
-                    fixed = await agent_llm.generate(
-                        prompt=fix_prompt, purpose="aggregate_plot_fix"
-                    )
+                    fixed = await agent_llm.generate(prompt=fix_prompt, purpose="aggregate_plot_fix")
                     # Extract code from response
                     if "```python" in fixed:
                         code = fixed.split("```python")[1].split("```")[0].strip()

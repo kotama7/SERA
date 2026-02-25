@@ -1,0 +1,60 @@
+prompts:
+  spec_generation:
+    description: "Generate structured research plan from user input"
+    template: |-
+      You are SERA, a Self-Evolving Research Agent. Your task is to generate a structured research plan based on the user's input and the surveyed literature.
+
+      ## User Input (Input-1)
+      Task: {task_brief}
+      Domain: {field} / {subfield}
+      Data: {data_description} ({data_format}, {data_size})
+      Goal: {goal_objective} (direction: {goal_direction})
+      Baseline: {baseline}
+      Constraints: {constraints_json}
+      Notes: {notes}
+
+      ## Related Work Summary
+      {related_work_summary}
+
+      ## Baseline Candidates
+      {baseline_candidates_json}
+
+      ## Common Metrics
+      {common_metrics_json}
+
+      ## Open Problems
+      {open_problems_json}
+
+      ## Instructions
+      Generate a research plan as a JSON object with the following structure:
+
+      {{
+        "problem_spec": {{
+          "title": "<concise research title>",
+          "hypothesis": "<clear, testable hypothesis>",
+          "independent_variables": ["<var1>", "<var2>"],
+          "dependent_variables": ["<metric1>", "<metric2>"],
+          "controls": ["<control1>"],
+          "methodology_summary": "<2-3 sentence methodology overview>"
+        }},
+        "plan_spec": {{
+          "approach_family": "<e.g., ensemble, neural, optimization>",
+          "steps": [
+            {{"name": "<step_name>", "description": "<what this step does>", "operator": "<draft|improve|debug>"}}
+          ],
+          "expected_baselines": ["<baseline1>", "<baseline2>"],
+          "evaluation_metrics": ["<metric1>", "<metric2>"],
+          "resource_estimate": {{
+            "gpu_hours": <float>,
+            "max_concurrent_runs": <int>
+          }}
+        }}
+      }}
+
+      Ensure:
+      1. The hypothesis is falsifiable and specific.
+      2. Steps cover data preparation, model development, training, and evaluation.
+      3. At least 2 baselines are included.
+      4. Metrics align with the goal objective.
+
+      Output ONLY the JSON, no other text.

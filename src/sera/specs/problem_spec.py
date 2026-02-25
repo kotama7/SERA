@@ -21,7 +21,7 @@ class ConstraintSpec(BaseModel):
     """A hard constraint on the problem."""
 
     name: str = Field(..., description="Constraint name")
-    type: Literal["bool", "ge", "le"] = Field(..., description="Constraint type")
+    type: Literal["bool", "ge", "le", "eq"] = Field(..., description="Constraint type")
     threshold: float | bool | None = Field(None, description="Threshold value")
     epsilon: float = Field(0.0, description="Tolerance for numeric constraints")
 
@@ -46,7 +46,10 @@ class ObservedVariable(BaseModel):
 class EvaluationDesign(BaseModel):
     """How experiments are evaluated."""
 
-    type: str = Field("holdout", description="Evaluation strategy, e.g. 'holdout', 'cv'")
+    type: Literal["holdout", "cross_validation", "paired_t_test", "bootstrap", "wilcoxon"] = Field(
+        "holdout",
+        description="Evaluation strategy type",
+    )
     test_split: float = Field(0.2, description="Fraction held out for testing")
     cv_folds: int | None = Field(None, description="Number of cross-validation folds")
 

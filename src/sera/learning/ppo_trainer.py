@@ -59,7 +59,7 @@ class PPOTrainer:
         learning = getattr(exec_spec, "learning", exec_spec)
         self.clip_range: float = getattr(learning, "clip_range", 0.2)
         self.lr: float = getattr(learning, "lr", 1e-4)
-        self.batch_size: int = getattr(learning, "batch_size", 4)
+        self.batch_size: int = getattr(learning, "batch_size", 16)
         self.mini_batch_size: int = getattr(learning, "mini_batch_size", 4)
         self.epochs_per_update: int = getattr(learning, "epochs_per_update", 4)
         self.gamma: float = getattr(learning, "gamma", 0.99)
@@ -68,7 +68,7 @@ class PPOTrainer:
         self.kl_coef: float = getattr(learning, "kl_coef", 0.01)
         self.kl_target: float = getattr(learning, "kl_target", 0.01)
         self.entropy_coef: float = getattr(learning, "entropy_coef", 0.01)
-        self.max_grad_norm: float = getattr(learning, "max_grad_norm", 1.0)
+        self.max_grad_norm: float = getattr(learning, "max_grad_norm", 0.5)
         self.value_loss_coef: float = getattr(learning, "value_loss_coef", 0.5)
         self.ppo_trigger_interval: int = getattr(learning, "ppo_trigger_interval", 5)
 
@@ -133,11 +133,20 @@ class PPOTrainer:
         else:
             self._steps_since_improvement += 1
 
-    def should_update(self, n_evaluated: int) -> bool:
+    def should_update(self, n_evaluated: int, evaluated_nodes: list | None = None) -> bool:
         """Return ``True`` when enough nodes have been evaluated to trigger
-        a PPO update, or when a plateau is detected."""
+        a PPO update, or when a plateau is detected.
+
+        Does **not** trigger if all evaluated nodes are constraint-violated
+        (no valid reward signal).
+        """
         if n_evaluated < 2:
             return False
+        # Do not update if all evaluated nodes are constraint-violated
+        if evaluated_nodes is not None and len(evaluated_nodes) > 0:
+            all_violated = all(not getattr(n, "feasible", True) for n in evaluated_nodes)
+            if all_violated:
+                return False
         if n_evaluated % self.ppo_trigger_interval == 0:
             return True
         # Plateau trigger
@@ -223,16 +232,41 @@ class PPOTrainer:
             vllm_engine.sleep()
 
         try:
-            return await self._ppo_update_core(
-                rollouts,
-                agent_llm,
-                specs,
-                np=np,
-                torch=torch,
-                Accelerator=Accelerator,
-                get_peft_model_state_dict=get_peft_model_state_dict,
-                entropy_from_logits=entropy_from_logits,
-            )
+            # OOM retry with batch halving (up to 2 retries)
+            effective_batch_size = self.batch_size
+            max_oom_retries = 2
+            last_exc = None
+            for oom_attempt in range(max_oom_retries + 1):
+                try:
+                    original_batch_size = self.batch_size
+                    self.batch_size = effective_batch_size
+                    result = await self._ppo_update_core(
+                        rollouts,
+                        agent_llm,
+                        specs,
+                        np=np,
+                        torch=torch,
+                        Accelerator=Accelerator,
+                        get_peft_model_state_dict=get_peft_model_state_dict,
+                        entropy_from_logits=entropy_from_logits,
+                    )
+                    self.batch_size = original_batch_size
+                    return result
+                except RuntimeError as e:
+                    self.batch_size = original_batch_size
+                    if "out of memory" in str(e).lower() and oom_attempt < max_oom_retries:
+                        effective_batch_size = max(1, effective_batch_size // 2)
+                        logger.warning(
+                            "GPU OOM during PPO update, halving batch to %d (attempt %d/%d)",
+                            effective_batch_size,
+                            oom_attempt + 1,
+                            max_oom_retries,
+                        )
+                        torch.cuda.empty_cache()
+                        last_exc = e
+                    else:
+                        raise
+            raise last_exc  # type: ignore[misc]
         finally:
             # Wake vLLM engine regardless of success/failure
             if vllm_engine is not None:
@@ -341,6 +375,11 @@ class PPOTrainer:
 
                 loss = policy_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy
 
+                # NaN/Inf detection: skip this update if loss is invalid
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.warning("NaN/Inf detected in PPO loss, skipping update")
+                    continue
+
                 optimizer.zero_grad()
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(lora_params, self.max_grad_norm)
@@ -367,12 +406,20 @@ class PPOTrainer:
             first_node_id = rollouts[0].node_id if rollouts else None
             # Parent adapter will be resolved by caller via search_manager
 
-            adapter_spec = getattr(self.model_spec, "adapter_spec", None)
             adapter_spec_hash = getattr(
                 getattr(self.model_spec, "compatibility", None),
                 "adapter_spec_hash",
                 "",
             )
+
+            # Compute depth from parent's lineage path
+            adapter_depth = 0
+            if parent_adapter_id and parent_adapter_id != "adapter_root":
+                parent_meta = self.lineage_manager.get_meta(parent_adapter_id)
+                if parent_meta is not None:
+                    adapter_depth = parent_meta.get("depth", 0) + 1
+            elif parent_adapter_id == "adapter_root":
+                adapter_depth = 1
 
             try:
                 self.lineage_manager.save_delta(
@@ -380,7 +427,7 @@ class PPOTrainer:
                     parent_id=parent_adapter_id,
                     delta_tensors=delta_tensors,
                     search_node_id=first_node_id or "",
-                    depth=0,  # Will be computed from lineage path
+                    depth=adapter_depth,
                     adapter_spec_hash=adapter_spec_hash,
                 )
                 logger.info(
@@ -404,6 +451,14 @@ class PPOTrainer:
 
         mean_reward = float(np.mean([r.reward for r in rollouts]))
 
+        # Collect turn_rewards from V2 rollouts
+        all_turn_rewards: dict[str, list[float]] = {}
+        for r in rollouts:
+            if hasattr(r, "turn_rewards") and r.turn_rewards:
+                for phase_key, value in r.turn_rewards.items():
+                    all_turn_rewards.setdefault(phase_key, []).append(value)
+        avg_turn_rewards = {k: float(np.mean(v)) for k, v in all_turn_rewards.items()} if all_turn_rewards else {}
+
         result = {
             "mean_reward": mean_reward,
             "kl_divergence": mean_kl,
@@ -413,6 +468,7 @@ class PPOTrainer:
             "delta_norm_l2": delta_norm,
             "kl_coef_current": self.kl_coef,
             "new_adapter_node_id": new_adapter_node_id,
+            "turn_rewards": avg_turn_rewards,
         }
 
         self.logger.log({"event": "ppo_update", **result})

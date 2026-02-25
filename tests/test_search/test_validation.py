@@ -149,9 +149,9 @@ class TestValidateExperimentConfig:
         spec = make_problem_spec()
         config = {
             "learning_rate": 100.0,  # out of range
-            "batch_size": "big",     # wrong type
+            "batch_size": "big",  # wrong type
             "optimizer": "rmsprop",  # invalid choice
-            "unknown": True,         # unknown key
+            "unknown": True,  # unknown key
         }
         is_valid, errors = validate_experiment_config(config, spec)
         assert is_valid is False

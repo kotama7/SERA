@@ -6,12 +6,14 @@ import asyncio
 import re
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import httpx
 
 from sera.phase0.api_clients.base import BaseScholarClient, PaperResult
 
 BASE_URL = "http://export.arxiv.org/api/query"
+_PDF_BASE_URL = "https://arxiv.org/pdf"
 
 # Atom namespace
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -87,6 +89,9 @@ def _parse_entry(entry: ET.Element) -> PaperResult | None:
 class ArxivClient(BaseScholarClient):
     """Async client for the arXiv Atom API."""
 
+    API_NAME = "arxiv"
+    ENDPOINT_URL = "http://export.arxiv.org/api/query"
+
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(timeout=30.0)
         self._last_request_time: float = 0.0
@@ -129,14 +134,40 @@ class ArxivClient(BaseScholarClient):
             results.append(paper)
         return results
 
-    async def get_references(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def download_pdf(self, arxiv_id: str, dest: str | Path) -> Path:
+        """Download a PDF from arXiv and save it to *dest*.
+
+        Parameters
+        ----------
+        arxiv_id : str
+            The arXiv identifier, e.g. ``"2301.12345"``.
+        dest : str | Path
+            Destination file path (or directory).  When *dest* is a directory
+            the file is saved as ``<arxiv_id>.pdf`` inside it.
+
+        Returns
+        -------
+        Path
+            The path to the downloaded file.
+        """
+        await self._rate_limit()
+
+        dest = Path(dest)
+        if dest.is_dir():
+            dest = dest / f"{arxiv_id.replace('/', '_')}.pdf"
+
+        url = f"{_PDF_BASE_URL}/{arxiv_id}.pdf"
+        resp = await self._client.get(url, follow_redirects=True)
+        resp.raise_for_status()
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(resp.content)
+        return dest
+
+    async def get_references(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         # arXiv API does not provide reference/citation graph.
         return []
 
-    async def get_citations(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_citations(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         # arXiv API does not provide reference/citation graph.
         return []

@@ -1,0 +1,103 @@
+prompts:
+  draft:
+    description: "Generate diverse experiment proposals for tree search"
+    template: |-
+      You are a research agent designing experiments for the following problem:
+
+      Problem: {problem_description}
+      Objective: {objective}
+      Manipulated variables: {variables}
+      Constraints: {constraints}
+
+      {existing_context}
+
+      Generate {n} diverse experiment proposals. Each proposal should include:
+      - hypothesis: a clear, testable hypothesis
+      - experiment_config: a dict of variable assignments (only manipulated variables)
+      - rationale: why this approach might work
+
+      Return a JSON array of objects with keys: hypothesis, experiment_config, rationale.
+      ```json
+      [{{"hypothesis": "...", "experiment_config": {{}}, "rationale": "..."}}]
+      ```
+
+  draft_category_prompts:
+    description: "Per-category instructions for root draft node generation"
+    categories:
+      baseline: "Propose a straightforward baseline approach. Use well-known, conventional methods as a reference point."
+      open_problem: "Propose an approach addressing a known open problem or limitation in the field. Focus on tackling a recognised challenge."
+      novel: "Propose a creative, unconventional approach. Think outside the box and try something that hasn't been tried before."
+
+  draft_category:
+    description: "Generate experiment proposals for a specific category"
+    template: |-
+      You are a research agent designing experiments for the following problem:
+
+      Problem: {problem_description}
+      Objective: {objective}
+      Manipulated variables: {variables}
+      Constraints: {constraints}
+
+      Category: {category_instruction}
+
+      Generate {n} experiment proposals of this category. Each proposal should include:
+      - hypothesis: a clear, testable hypothesis
+      - experiment_config: a dict of variable assignments (only manipulated variables)
+      - rationale: why this approach might work
+
+      Return a JSON array of objects with keys: hypothesis, experiment_config, rationale.
+      ```json
+      [{{"hypothesis": "...", "experiment_config": {{}}, "rationale": "..."}}]
+      ```
+
+  debug:
+    description: "Fix failed experiment code"
+    template: |-
+      You are debugging a failed experiment.
+
+      Problem: {problem_description}
+      Hypothesis: {hypothesis}
+      Experiment config: {experiment_config}
+
+      The experiment code failed with error:
+      {error_message}
+
+      Experiment code:
+      ```{code_block_tag}
+      {experiment_code}
+      ```
+
+      Fix the code. Return a JSON object with:
+      - hypothesis: the same or refined hypothesis
+      - experiment_config: the same config (or minimally adjusted)
+      - experiment_code: the corrected code
+      - rationale: what was wrong and how you fixed it
+
+      ```json
+      {{"hypothesis": "...", "experiment_config": {{}}, "experiment_code": "...", "rationale": "..."}}
+      ```
+
+  improve:
+    description: "Propose atomic improvements to an evaluated experiment"
+    template: |-
+      You are improving an experiment that produced results.
+
+      Problem: {problem_description}
+      Objective: {objective}
+      Manipulated variables: {variables}
+
+      Parent experiment:
+      - Hypothesis: {parent_hypothesis}
+      - Config: {parent_config}
+      - Result: mu={parent_mu}, SE={parent_se}, LCB={parent_lcb}
+      - Feasible: {parent_feasible}
+
+      {sibling_context}
+
+      {failure_context}
+
+      Propose {n_children} atomic improvements. Each should change at most 1-2 variables.
+      Return a JSON array:
+      ```json
+      [{{"hypothesis": "...", "experiment_config": {{}}, "rationale": "..."}}]
+      ```

@@ -27,6 +27,12 @@ class PaperResult:
 class BaseScholarClient(ABC):
     """Abstract base class that every paper-search client must implement."""
 
+    #: Short identifier used in logs and query log schema (e.g. "semantic_scholar").
+    API_NAME: str = "unknown"
+
+    #: Full endpoint URL for the primary search, used in query log entries.
+    ENDPOINT_URL: str = ""
+
     @abstractmethod
     async def search(
         self,
@@ -38,15 +44,11 @@ class BaseScholarClient(ABC):
         ...
 
     @abstractmethod
-    async def get_references(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_references(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         """Return papers referenced by *paper_id*."""
         ...
 
     @abstractmethod
-    async def get_citations(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_citations(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         """Return papers that cite *paper_id*."""
         ...

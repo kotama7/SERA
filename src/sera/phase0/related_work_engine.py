@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Awaitable
+from typing import Any, Callable, Awaitable
 
 import structlog
 
@@ -31,6 +31,7 @@ logger = structlog.get_logger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Phase0Config:
     """Tunable knobs for the related-work search."""
@@ -46,6 +47,7 @@ class Phase0Config:
 # Output container
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Phase0Output:
     """Holds the four artefacts produced by Phase 0."""
@@ -59,6 +61,7 @@ class Phase0Output:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _paper_result_to_spec(p: PaperResult, query: str = "") -> PaperSpec:
     return PaperSpec(
@@ -79,6 +82,61 @@ def _paper_result_to_spec(p: PaperResult, query: str = "") -> PaperSpec:
     )
 
 
+def _compute_keyword_relevance(paper: PaperResult, keywords: list[str]) -> float:
+    """Compute a simple keyword-overlap relevance score in [0, 1].
+
+    Counts what fraction of *keywords* appear (case-insensitive) in the paper's
+    title + abstract.  Returns 0.5 when *keywords* is empty so that the default
+    ranking behaviour is preserved.
+    """
+    if not keywords:
+        return 0.5
+    text = f"{paper.title} {paper.abstract}".lower()
+    hits = sum(1 for kw in keywords if kw.lower() in text)
+    return hits / len(keywords)
+
+
+def _assign_relevance_scores(
+    papers: list[PaperResult],
+    input1: Any,
+) -> list[PaperResult]:
+    """Assign a relevance_score to each paper based on keyword overlap with Input-1.
+
+    Builds a keyword list from the Input-1 brief, field, subfield, and objective,
+    then scores each paper.  Papers that already have a non-default relevance_score
+    (i.e. != 0.5) are left unchanged.
+    """
+    # Build keywords from Input-1 fields
+    keywords: list[str] = []
+    brief = getattr(input1.task, "brief", "") or ""
+    field = getattr(input1.domain, "field", "") or ""
+    subfield = getattr(input1.domain, "subfield", "") or ""
+    objective = getattr(input1.goal, "objective", "") or ""
+
+    for text in (brief, field, subfield, objective):
+        for token in text.split():
+            token_clean = token.strip(",.;:()\"'").lower()
+            if len(token_clean) >= 3:
+                keywords.append(token_clean)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_kw: list[str] = []
+    for kw in keywords:
+        if kw not in seen:
+            seen.add(kw)
+            unique_kw.append(kw)
+    keywords = unique_kw
+
+    scored: list[PaperResult] = []
+    for p in papers:
+        # Only override the default relevance_score (0.5)
+        if p.relevance_score == 0.5:
+            p.relevance_score = _compute_keyword_relevance(p, keywords)
+        scored.append(p)
+    return scored
+
+
 def _deduplicate(papers: list[PaperResult]) -> list[PaperResult]:
     """Remove duplicate papers by paper_id, keeping the first occurrence."""
     seen: set[str] = set()
@@ -93,6 +151,7 @@ def _deduplicate(papers: list[PaperResult]) -> list[PaperResult]:
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
+
 
 class RelatedWorkEngine:
     """Orchestrates the Phase 0 related-work pipeline.
@@ -129,9 +188,13 @@ class RelatedWorkEngine:
         if self._agent_llm is not None:
             try:
                 prompt = (
-                    "Given the following research task, generate 3 diverse search "
-                    "queries for finding related academic papers.  Return one query "
-                    "per line, no numbering.\n\n"
+                    "Given the following research task, generate exactly 3 search "
+                    "queries for finding related academic papers. Each query must "
+                    "belong to a different category:\n"
+                    "1. Main query: directly about the core research topic\n"
+                    "2. Method query: about methods/techniques used in this area\n"
+                    "3. Baseline query: about established baselines and benchmarks\n\n"
+                    "Return one query per line, no numbering or labels.\n\n"
                     f"Task: {input1.task.brief}\n"
                     f"Domain: {input1.domain.field}"
                     f"{(' / ' + input1.domain.subfield) if input1.domain.subfield else ''}\n"
@@ -156,46 +219,51 @@ class RelatedWorkEngine:
     ) -> list[PaperResult]:
         """Try each client in priority order; return results from the first that succeeds."""
         query_id = str(uuid.uuid4())
+        retry_count = 0
         for client in self._clients:
-            endpoint = type(client).__name__
-            retry_count = 0
+            api_name = getattr(client, "API_NAME", type(client).__name__)
+            endpoint_url = getattr(client, "ENDPOINT_URL", "") or api_name
             try:
                 results = await client.search(query, limit=limit, year_from=year_from)
                 # Log query per section 4.5 queries.jsonl schema
                 if self._logger:
-                    self._logger.log({
-                        "event": "api_query",
-                        "query_id": query_id,
-                        "api": endpoint,
-                        "endpoint": endpoint,
-                        "params": {"query": query, "limit": limit, "year_from": year_from},
-                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                        "http_status": 200,
-                        "result_count": len(results),
-                        "paper_ids_returned": [r.paper_id for r in results[:20]],
-                        "retry_count": retry_count,
-                    })
+                    self._logger.log(
+                        {
+                            "event": "api_query",
+                            "query_id": query_id,
+                            "api": api_name,
+                            "endpoint": endpoint_url,
+                            "params": {"query": query, "limit": limit, "year_from": year_from},
+                            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                            "http_status": 200,
+                            "result_count": len(results),
+                            "paper_ids_returned": [r.paper_id for r in results[:20]],
+                            "retry_count": retry_count,
+                        }
+                    )
                 if results:
                     return results
             except Exception as exc:
                 retry_count += 1
                 if self._logger:
-                    self._logger.log({
-                        "event": "api_query",
-                        "query_id": query_id,
-                        "api": endpoint,
-                        "endpoint": endpoint,
-                        "params": {"query": query, "limit": limit, "year_from": year_from},
-                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                        "http_status": 0,
-                        "result_count": 0,
-                        "paper_ids_returned": [],
-                        "retry_count": retry_count,
-                        "error": str(exc),
-                    })
+                    self._logger.log(
+                        {
+                            "event": "api_query",
+                            "query_id": query_id,
+                            "api": api_name,
+                            "endpoint": endpoint_url,
+                            "params": {"query": query, "limit": limit, "year_from": year_from},
+                            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                            "http_status": 0,
+                            "result_count": 0,
+                            "paper_ids_returned": [],
+                            "retry_count": retry_count,
+                            "error": str(exc),
+                        }
+                    )
                 logger.warning(
                     "search_client_failed",
-                    client=endpoint,
+                    client=api_name,
                     query=query,
                     error=str(exc),
                 )
@@ -229,6 +297,151 @@ class RelatedWorkEngine:
                     continue
         return extra
 
+    # -- open problems extraction ----------------------------------------------
+
+    async def _extract_open_problems(
+        self,
+        papers: list[PaperResult],
+        clusters: list,
+    ) -> list[OpenProblem]:
+        """Extract open problems from papers using LLM, falling back to cluster descriptions."""
+        if self._agent_llm is not None and papers:
+            try:
+                paper_lines: list[str] = []
+                for p in papers[:15]:  # Limit to avoid overly long prompts
+                    paper_lines.append(
+                        f"- [{p.paper_id}] {p.title} ({p.year or 'n/a'}): "
+                        f"{(p.abstract[:200] + '...') if p.abstract and len(p.abstract) > 200 else p.abstract}"
+                    )
+                papers_text = "\n".join(paper_lines)
+                prompt = (
+                    "You are a research analyst. Given the following papers, identify 3-5 open "
+                    "research problems or gaps that remain unsolved. For each problem, indicate "
+                    "which papers are most relevant and a severity level.\n\n"
+                    "Return ONLY valid JSON with the following schema:\n"
+                    '[\n  {"description": "...", "related_paper_ids": ["id1", ...], '
+                    '"severity": "low|medium|high"}\n]\n\n'
+                    f"Papers:\n{papers_text}\n\n"
+                    "Respond with JSON only, no markdown fences."
+                )
+                raw = await self._agent_llm(prompt)
+
+                import json as _json
+                import re as _re
+
+                cleaned = raw.strip()
+                cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+                cleaned = _re.sub(r"\s*```$", "", cleaned)
+                data = _json.loads(cleaned)
+
+                if isinstance(data, list):
+                    valid_ids = {p.paper_id for p in papers}
+                    problems: list[OpenProblem] = []
+                    for item in data:
+                        desc = item.get("description", "")
+                        raw_ids = item.get("related_paper_ids", [])
+                        paper_ids = [pid for pid in raw_ids if pid in valid_ids]
+                        severity = item.get("severity", "medium")
+                        if severity not in ("low", "medium", "high"):
+                            severity = "medium"
+                        if desc:
+                            problems.append(
+                                OpenProblem(
+                                    description=desc,
+                                    related_paper_ids=paper_ids,
+                                    severity=severity,
+                                )
+                            )
+                    if problems:
+                        return problems
+            except Exception:
+                pass  # Fall through to fallback
+
+        # Fallback: derive open problems from cluster descriptions
+        return [
+            OpenProblem(
+                description=c.description,
+                related_paper_ids=list(c.paper_ids),
+                severity="medium",
+            )
+            for c in clusters
+            if c.description
+        ]
+
+    # -- teacher paper analysis ------------------------------------------------
+
+    async def _analyze_teacher_papers(
+        self,
+        papers: list[PaperSpec],
+    ) -> list[dict[str, Any]]:
+        """Analyze teacher papers via LLM to infer structural metadata.
+
+        For each paper, infers role, sections, figure_count, table_count,
+        experiment_style, and stats_format from the abstract.  Falls back
+        to sensible defaults when the LLM is unavailable or fails.
+        """
+        metadata: list[dict[str, Any]] = []
+
+        for paper in papers:
+            entry: dict[str, Any] = {
+                "paper_id": paper.paper_id,
+                "title": paper.title,
+                "role": "structure_reference",
+                "sections": [],
+                "figure_count": 0,
+                "table_count": 0,
+                "experiment_style": "",
+                "stats_format": "",
+            }
+
+            if self._agent_llm is not None and paper.abstract:
+                try:
+                    prompt = (
+                        "Analyze this academic paper and return ONLY valid JSON with the "
+                        "following fields:\n"
+                        '- "role": one of "structure_reference", "method_reference", or "both"\n'
+                        '- "sections": list of likely section headings (e.g. '
+                        '["Introduction","Related Work","Method","Experiments","Conclusion"])\n'
+                        '- "figure_count": estimated number of figures (integer)\n'
+                        '- "table_count": estimated number of tables (integer)\n'
+                        '- "experiment_style": brief description (e.g. "ablation-heavy", '
+                        '"benchmark-comparison")\n'
+                        '- "stats_format": how statistics are presented (e.g. "mean±std", '
+                        '"median [IQR]")\n\n'
+                        f"Title: {paper.title}\n"
+                        f"Abstract: {paper.abstract}\n\n"
+                        "Respond with JSON only, no markdown fences."
+                    )
+                    raw = await self._agent_llm(prompt)
+
+                    import json as _json
+                    import re as _re
+
+                    cleaned = raw.strip()
+                    cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+                    cleaned = _re.sub(r"\s*```$", "", cleaned)
+                    data = _json.loads(cleaned)
+
+                    if isinstance(data, dict):
+                        if data.get("role") in ("structure_reference", "method_reference", "both"):
+                            entry["role"] = data["role"]
+                        if isinstance(data.get("sections"), list):
+                            entry["sections"] = [str(s) for s in data["sections"]]
+                        if isinstance(data.get("figure_count"), int):
+                            entry["figure_count"] = data["figure_count"]
+                        if isinstance(data.get("table_count"), int):
+                            entry["table_count"] = data["table_count"]
+                        if isinstance(data.get("experiment_style"), str):
+                            entry["experiment_style"] = data["experiment_style"]
+                        if isinstance(data.get("stats_format"), str):
+                            entry["stats_format"] = data["stats_format"]
+                except Exception:
+                    pass  # Keep defaults
+
+            metadata.append(entry)
+
+        return metadata
+
     # -- main entry point ------------------------------------------------------
 
     async def run(
@@ -247,18 +460,18 @@ class RelatedWorkEngine:
         # 2. Search
         all_papers: list[PaperResult] = []
         for q in queries:
-            results = await self._search_with_fallback(
-                q, limit=cfg.top_k_papers, year_from=year_from
-            )
+            results = await self._search_with_fallback(q, limit=cfg.top_k_papers, year_from=year_from)
             all_papers.extend(results)
 
             # Log query
             if self._logger:
-                self._logger.log({
-                    "event": "phase0_query",
-                    "query": q,
-                    "num_results": len(results),
-                })
+                self._logger.log(
+                    {
+                        "event": "phase0_query",
+                        "query": q,
+                        "num_results": len(results),
+                    }
+                )
 
         # 3. Deduplicate
         all_papers = _deduplicate(all_papers)
@@ -272,6 +485,9 @@ class RelatedWorkEngine:
             )
             all_papers.extend(expansion)
             all_papers = _deduplicate(all_papers)
+
+        # 4b. Assign relevance scores based on keyword overlap with Input-1
+        all_papers = _assign_relevance_scores(all_papers, input1)
 
         # 5. Rank
         ranked = rank_papers(all_papers, ranking_weight=cfg.citation_weight)
@@ -290,9 +506,7 @@ class RelatedWorkEngine:
             paper_specs.append(_paper_result_to_spec(p))
             cn = citation_norm(p.citation_count, max_cit)
             rel = getattr(p, "relevance_score", 0.5)
-            combined = compute_ranking_score(
-                p.citation_count, max_cit, rel, cfg.citation_weight
-            )
+            combined = compute_ranking_score(p.citation_count, max_cit, rel, cfg.citation_weight)
             paper_scores.append(
                 PaperScoreSpec(
                     paper_id=p.paper_id,
@@ -304,7 +518,7 @@ class RelatedWorkEngine:
 
         cluster_specs = [
             ClusterSpec(
-                label=c.label,
+                name=c.label,
                 description=c.description,
                 paper_ids=list(c.paper_ids),
                 keywords=list(getattr(c, "keywords", [])),
@@ -318,27 +532,55 @@ class RelatedWorkEngine:
             BaselineCandidate(
                 name=p.title,
                 paper_id=p.paper_id,
-                reported_metric=getattr(input1.goal, "metric", "") if input1.goal else "",
+                reported_metric={
+                    "name": getattr(input1.goal, "metric", "") if input1.goal else "",
+                    "value": 0.0,
+                    "scale": "",
+                },
                 method_summary=p.abstract[:200] if p.abstract else "",
             )
             for p in top_cited
         ]
 
         # Extract common metrics mentioned across papers
-        common_metrics: list[str] = []
+        common_metrics: list[dict[str, Any]] = []
         if input1.goal and hasattr(input1.goal, "metric"):
-            common_metrics.append(input1.goal.metric)
-
-        # Extract open problems from clustering
-        open_problems: list[OpenProblem] = [
-            OpenProblem(
-                description=c.description,
-                related_paper_ids=list(c.paper_ids),
-                severity="medium",
+            common_metrics.append(
+                {
+                    "name": input1.goal.metric,
+                    "description": "",
+                    "scale": "",
+                    "higher_is_better": getattr(input1.goal, "direction", "maximize") == "maximize",
+                }
             )
-            for c in clusters
-            if c.description
-        ]
+
+        # Extract common datasets mentioned in paper abstracts
+        common_datasets: list[dict[str, Any]] = []
+        dataset_mentions: dict[str, int] = {}
+        # Check if Input-1 specifies a dataset
+        input_dataset = getattr(input1.task, "dataset", None) or getattr(input1, "dataset", None)
+        if input_dataset:
+            ds_name = getattr(input_dataset, "name", str(input_dataset)) if not isinstance(input_dataset, str) else input_dataset
+            if ds_name:
+                dataset_mentions[ds_name] = dataset_mentions.get(ds_name, 0) + len(top_papers)
+
+        # Scan abstracts for dataset names (case-insensitive, whole word)
+        import re as _re
+        for p in top_papers:
+            if not p.abstract:
+                continue
+            abstract_lower = p.abstract.lower()
+            # Look for common dataset name patterns: "on the X dataset", "X benchmark"
+            for match in _re.finditer(r"(?:on\s+(?:the\s+)?|using\s+(?:the\s+)?)([A-Z][A-Za-z0-9\-]+)(?:\s+(?:dataset|benchmark|corpus))", p.abstract):
+                name = match.group(1)
+                dataset_mentions[name] = dataset_mentions.get(name, 0) + 1
+
+        for ds_name, count in sorted(dataset_mentions.items(), key=lambda x: -x[1]):
+            if count >= 1:
+                common_datasets.append({"name": ds_name, "mention_count": count})
+
+        # Extract open problems via LLM (falls back to cluster descriptions)
+        open_problems: list[OpenProblem] = await self._extract_open_problems(top_papers, clusters)
 
         related_work = RelatedWorkSpec(
             papers=paper_specs,
@@ -347,20 +589,52 @@ class RelatedWorkEngine:
             baseline_candidates=baseline_candidates,
             common_metrics=common_metrics,
             open_problems=open_problems,
+            common_datasets=common_datasets,
         )
 
         teacher_set = TeacherPaperSet(
             papers=paper_specs[: cfg.teacher_papers],
         )
 
+        # Analyze teacher papers via LLM to infer metadata fields
+        teacher_set.teacher_paper_metadata = await self._analyze_teacher_papers(
+            teacher_set.papers
+        )
+
+        # Populate structure_summary from teacher paper metadata
+        if teacher_set.teacher_paper_metadata:
+            meta = teacher_set.teacher_paper_metadata
+            n = len(meta)
+            avg_sections = sum(len(m.get("sections", [])) for m in meta) / n if n else 0.0
+            avg_figures = sum(m.get("figure_count", 0) for m in meta) / n if n else 0.0
+            avg_tables = sum(m.get("table_count", 0) for m in meta) / n if n else 0.0
+
+            # Find most common experiment pattern
+            exp_styles = [m.get("experiment_style", "") for m in meta if m.get("experiment_style")]
+            common_exp = max(set(exp_styles), key=exp_styles.count) if exp_styles else ""
+
+            # Find most common stats format
+            stats_fmts = [m.get("stats_format", "") for m in meta if m.get("stats_format")]
+            common_stats = max(set(stats_fmts), key=stats_fmts.count) if stats_fmts else ""
+
+            teacher_set.structure_summary = {
+                "avg_sections": round(avg_sections, 1),
+                "avg_figures": round(avg_figures, 1),
+                "avg_tables": round(avg_tables, 1),
+                "common_experiment_pattern": common_exp,
+                "common_stats_format": common_stats,
+            }
+
         if self._logger:
-            self._logger.log({
-                "event": "phase0_complete",
-                "total_searched": len(all_papers),
-                "top_k": len(top_papers),
-                "num_clusters": len(cluster_specs),
-                "teacher_papers": len(teacher_set.papers),
-            })
+            self._logger.log(
+                {
+                    "event": "phase0_complete",
+                    "total_searched": len(all_papers),
+                    "top_k": len(top_papers),
+                    "num_clusters": len(cluster_specs),
+                    "teacher_papers": len(teacher_set.papers),
+                }
+            )
 
         return Phase0Output(
             related_work_spec=related_work,

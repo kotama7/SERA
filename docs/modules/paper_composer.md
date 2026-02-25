@@ -10,6 +10,7 @@ Phase 7 の論文生成を担当するモジュール群のドキュメント。
 | `FigureGenerator` | `src/sera/paper/figure_generator.py` |
 | `CitationSearcher` | `src/sera/paper/citation_searcher.py` |
 | `VLMReviewer` | `src/sera/paper/vlm_reviewer.py` |
+| `LaTeXComposer` | `src/sera/paper/latex_composer.py` |
 
 ## 依存関係
 
@@ -42,15 +43,26 @@ Phase 7 の論文生成を担当するモジュール群のドキュメント。
 ### コンストラクタ
 
 ```python
-def __init__(self, output_dir: str | Path, n_writeup_reflections: int = 3)
+def __init__(self, output_dir: str | Path, n_writeup_reflections: int = 3, log_dir: str | Path | None = None)
 ```
 
 - `output_dir`: 論文の出力先ディレクトリ（自動作成）
 - `n_writeup_reflections`: 執筆リフレクションループの最大回数（デフォルト 3）
+- `log_dir`: ログディレクトリ（`None` の場合は `output_dir` の親 / `logs`）
 
-### compose(evidence, paper_spec, teacher_papers, agent_llm, vlm, semantic_scholar_client) -> Paper
+### compose(evidence, paper_spec, teacher_papers, agent_llm, vlm, semantic_scholar_client, ablation_runner) -> Paper
 
 論文生成パイプライン全体を実行する非同期メソッド。`agent_llm` は必須（None の場合は `ValueError`）。
+
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `evidence` | `EvidenceStore` | 実験エビデンス |
+| `paper_spec` | `PaperSpecModel \| None` | 論文フォーマット設定 |
+| `teacher_papers` | `TeacherPaperSetModel \| None` | 教師論文セット |
+| `agent_llm` | `AgentLLM` | テキスト生成用 LLM（必須） |
+| `vlm` | `VLMReviewer \| None` | VLM レビュアー（None でスキップ） |
+| `semantic_scholar_client` | `SemanticScholarClient \| None` | 引用検索クライアント |
+| `ablation_runner` | `AblationRunner \| None` | auto-ablation ランナー（None でスキップ） |
 
 ### 6 ステップパイプライン
 
@@ -65,6 +77,19 @@ def __init__(self, output_dir: str | Path, n_writeup_reflections: int = 3)
 - 最良ノードの情報（hypothesis, mu, se, lcb, config）
 
 出力: `experiment_summaries.json` としてディスクに保存。
+
+#### Step 1b: Auto-ablation（オプション）
+
+`ablation_runner` が `compose()` に渡された場合、最良ノードに対してアブレーション実験を自動実行する。
+
+```python
+if ablation_runner is not None and evidence.best_node is not None:
+    ablation_results = await ablation_runner.run_ablation(evidence.best_node)
+    ablation_data = ablation_runner.format_results(ablation_results)
+    evidence.add_ablation_data(ablation_data)
+```
+
+`AblationRunner`（`sera.execution.ablation`）は各操作変数を 1 つずつベースライン値にリセットし、メトリクスへの影響を測定する。結果は `evidence` に追加され、Step 2 のプロット生成に反映される。
 
 #### Step 2: プロット集約 (_step2_plot_aggregation)
 
@@ -297,3 +322,39 @@ def __init__(self, model: str | None = None, provider: str | None = None)
 ```
 
 各 bib_entry の `citation_key` は `CitationSearcher` が生成する `{lastname}{year}` 形式。著者は `" and "` で結合される。
+
+---
+
+## LaTeXComposer
+
+Markdown 形式の論文を LaTeX に変換するクラス。
+
+### コンストラクタ
+
+```python
+def __init__(self)
+```
+
+### compose(sections, metadata=None) -> str
+
+セクション辞書から完全な LaTeX ドキュメントを生成する。
+
+- `sections`: `dict[str, str]` -- セクション名 -> Markdown 本文
+- `metadata`: `dict | None` -- タイトル、著者等のメタデータ
+
+### compose_from_paper(paper) -> str
+
+`Paper` データクラスから LaTeX ドキュメントを生成する。`paper.content`（Markdown）を変換し、`paper.bib_entries` を参考文献として追加する。
+
+### 内部変換処理
+
+| 入力（Markdown） | 出力（LaTeX） |
+|-----------------|--------------|
+| `# Heading` | `\section{Heading}` |
+| `## Heading` | `\subsection{Heading}` |
+| `**bold**` | `\textbf{bold}` |
+| `*italic*` | `\textit{italic}` |
+| `` `code` `` | `\texttt{code}` |
+| コードブロック | `\begin{lstlisting}...\end{lstlisting}` |
+| テーブル | `\begin{tabular}...\end{tabular}` |
+| `![caption](path)` | `\begin{figure}...\includegraphics{path}...\end{figure}` |

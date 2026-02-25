@@ -9,9 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def validate_experiment_config(
-    config: dict, problem_spec: Any
-) -> tuple[bool, list[str]]:
+def validate_experiment_config(config: dict, problem_spec: Any) -> tuple[bool, list[str]]:
     """Validate an experiment configuration against the problem spec.
 
     Performs whitelist validation:
@@ -50,8 +48,7 @@ def validate_experiment_config(
     for key in config:
         if key not in allowed_keys:
             errors.append(
-                f"Unknown config key '{key}' is not in manipulated_variables. "
-                f"Allowed keys: {sorted(allowed_keys)}"
+                f"Unknown config key '{key}' is not in manipulated_variables. Allowed keys: {sorted(allowed_keys)}"
             )
 
     # 2. Validate type and range for each known key
@@ -66,33 +63,23 @@ def validate_experiment_config(
 
         if var_type == "float":
             if not isinstance(value, (int, float)):
-                errors.append(
-                    f"Variable '{key}' expects float, got {type(value).__name__}: {value!r}"
-                )
+                errors.append(f"Variable '{key}' expects float, got {type(value).__name__}: {value!r}")
             elif var_range is not None and len(var_range) == 2:
                 lo, hi = var_range[0], var_range[1]
                 if value < lo or value > hi:
-                    errors.append(
-                        f"Variable '{key}' value {value} out of range [{lo}, {hi}]"
-                    )
+                    errors.append(f"Variable '{key}' value {value} out of range [{lo}, {hi}]")
 
         elif var_type == "int":
             if not isinstance(value, int) or isinstance(value, bool):
-                errors.append(
-                    f"Variable '{key}' expects int, got {type(value).__name__}: {value!r}"
-                )
+                errors.append(f"Variable '{key}' expects int, got {type(value).__name__}: {value!r}")
             elif var_range is not None and len(var_range) == 2:
                 lo, hi = int(var_range[0]), int(var_range[1])
                 if value < lo or value > hi:
-                    errors.append(
-                        f"Variable '{key}' value {value} out of range [{lo}, {hi}]"
-                    )
+                    errors.append(f"Variable '{key}' value {value} out of range [{lo}, {hi}]")
 
         elif var_type == "categorical":
             if var_choices is not None and value not in var_choices:
-                errors.append(
-                    f"Variable '{key}' value {value!r} not in choices: {var_choices}"
-                )
+                errors.append(f"Variable '{key}' value {value!r} not in choices: {var_choices}")
 
     is_valid = len(errors) == 0
     return is_valid, errors

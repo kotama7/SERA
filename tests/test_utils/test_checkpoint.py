@@ -1,4 +1,5 @@
 """Tests for sera.utils.checkpoint module."""
+
 import json
 import pytest
 from pathlib import Path

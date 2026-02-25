@@ -1,0 +1,93 @@
+prompts:
+  query_generation:
+    description: "Generate search queries for literature survey"
+    template: |-
+      You are a research assistant helping to survey the literature for a new research project.
+
+      ## Task Description
+      {task_description}
+
+      ## Research Domain
+      Field: {field}
+      Subfield: {subfield}
+
+      ## Goal
+      {goal_objective}
+
+      ## Instructions
+      Generate 3-5 diverse search queries that would help find the most relevant papers for this research task. The queries should:
+      1. Cover different aspects of the problem (methods, datasets, evaluation metrics, related tasks).
+      2. Use varied terminology to maximize coverage (synonyms, alternative phrasings).
+      3. Include at least one broad query and one highly specific query.
+      4. Target key recent advances as well as foundational work.
+
+      Return your queries as a JSON array of strings. Example:
+      ["query 1", "query 2", "query 3"]
+
+      Output ONLY the JSON array, no other text.
+
+  paper_clustering:
+    description: "Cluster papers by thematic similarity"
+    template: |-
+      You are a research librarian organizing a literature survey.
+
+      ## Task Context
+      {task_description}
+
+      ## Papers to Cluster
+      {papers_json}
+
+      ## Instructions
+      Group the papers above into thematic clusters based on their methodological approach, problem formulation, or contribution type. For each cluster, provide:
+      - A concise name (2-5 words)
+      - A one-sentence description of what unifies the cluster
+      - The list of paper IDs belonging to the cluster
+      - 3-5 representative keywords
+
+      Each paper should appear in exactly one cluster. Aim for 3-7 clusters.
+
+      Return your result as JSON:
+      {{
+        "clusters": [
+          {{
+            "name": "...",
+            "description": "...",
+            "paper_ids": ["id1", "id2"],
+            "keywords": ["kw1", "kw2", "kw3"]
+          }}
+        ]
+      }}
+
+      Output ONLY the JSON, no other text.
+
+  relevance_scoring:
+    description: "Score paper relevance to research task"
+    template: |-
+      You are an expert reviewer assessing paper relevance to a research task.
+
+      ## Research Task
+      {task_description}
+
+      ## Goal
+      {goal_objective}
+
+      ## Paper Under Review
+      Title: {paper_title}
+      Authors: {paper_authors}
+      Year: {paper_year}
+      Abstract: {paper_abstract}
+
+      ## Instructions
+      Score the relevance of this paper to the research task on a scale from 0.0 to 1.0:
+      - 0.0: Completely irrelevant
+      - 0.25: Tangentially related (shares domain but not methods or problem)
+      - 0.5: Moderately relevant (related methods or problem, but different focus)
+      - 0.75: Highly relevant (directly addresses similar problems or uses applicable methods)
+      - 1.0: Perfectly relevant (addresses the exact problem or proposes a directly usable method)
+
+      Also provide a brief (1-2 sentence) justification.
+
+      Return as JSON:
+      {{"score": <float>, "justification": "<string>"}}
+
+      Output ONLY the JSON, no other text.

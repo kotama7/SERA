@@ -55,10 +55,14 @@ class TestSaveDelta:
         with open(meta_path) as f:
             meta = json.load(f)
         assert meta["adapter_node_id"] == "n1"
-        assert meta["parent_id"] == "root"
+        assert meta["parent_adapter_node_id"] == "root"
         assert meta["depth"] == 1
         assert meta["is_snapshot"] is False
         assert "layer.lora_A" in meta["tensor_names"]
+        # New fields: delta_norm_l2 and created_at
+        assert isinstance(meta["delta_norm_l2"], float)
+        assert meta["delta_norm_l2"] > 0
+        assert isinstance(meta["created_at"], str)
 
 
 class TestMaterializeChain:
@@ -108,6 +112,7 @@ class TestMaterializeWithSnapshot:
 
         # Manually create a snapshot for child1 (sum = 1+2 = 3)
         from safetensors.torch import save_file
+
         snapshot_path = lineage_dir / "nodes" / "child1" / "adapter_snapshot.safetensors"
         save_file({"w": torch.full((4, 4), 3.0)}, str(snapshot_path))
         # Update meta
@@ -133,11 +138,11 @@ class TestSquashCreatesSnapshot:
     def test_squash_creates_snapshot(self, manager, lineage_dir):
         """Nodes at depth >= squash_threshold get a snapshot file."""
 
-        class MockSearchConfig:
-            max_depth = 6
+        class MockLoraRuntime:
+            squash_depth = 3
 
         class MockExecSpec:
-            search = MockSearchConfig()
+            lora_runtime = MockLoraRuntime()
 
         # Chain of depth 0..4
         manager.save_delta("n0", None, {"w": torch.full((4, 4), 1.0)}, "s0", 0, SPEC_HASH)
@@ -146,7 +151,7 @@ class TestSquashCreatesSnapshot:
         manager.save_delta("n3", "n2", {"w": torch.full((4, 4), 1.0)}, "s3", 3, SPEC_HASH)
         manager.save_delta("n4", "n3", {"w": torch.full((4, 4), 1.0)}, "s4", 4, SPEC_HASH)
 
-        # squash_threshold = max_depth // 2 = 3
+        # squash_threshold = lora_runtime.squash_depth = 3
         squashed = manager.maybe_squash(MockExecSpec())
 
         # n3 (depth=3) and n4 (depth=4) should be squashed

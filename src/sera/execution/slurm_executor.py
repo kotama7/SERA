@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from dataclasses import dataclass
+
 from sera.execution.executor import Executor, RunResult
 from sera.specs.resource_spec import ComputeConfig, SlurmConfig
 
@@ -23,6 +25,27 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SEC = 10
 _OOM_STDERR_PATTERNS = ("MemoryError", "OutOfMemoryError", "Killed", "Cannot allocate memory")
+
+
+@dataclass
+class SlurmJobHandle:
+    """Typed handle for a submitted SLURM job."""
+
+    job: Any
+    node_id: str
+    seed: int
+    run_dir: Path
+    start_time: float
+    timeout_sec: int | None
+    slurm_log_dir: Path
+    stdout_path: Path
+    stderr_path: Path
+    metrics_path: Path
+    status: str = "pending"
+
+    @property
+    def job_id(self) -> str:
+        return str(self.job.job_id)
 
 
 def _run_experiment(
@@ -412,18 +435,18 @@ class SlurmExecutor(Executor):
             seed,
         )
 
-        return {
-            "job": job,
-            "node_id": node_id,
-            "seed": seed,
-            "run_dir": run_dir,
-            "start_time": start_time,
-            "timeout_sec": timeout_sec,
-            "slurm_log_dir": slurm_log_dir,
-            "stdout_path": stdout_path,
-            "stderr_path": stderr_path,
-            "metrics_path": metrics_path,
-        }
+        return SlurmJobHandle(
+            job=job,
+            node_id=node_id,
+            seed=seed,
+            run_dir=run_dir,
+            start_time=start_time,
+            timeout_sec=timeout_sec,
+            slurm_log_dir=slurm_log_dir,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            metrics_path=metrics_path,
+        )
 
     async def collect_result(
         self,
@@ -497,13 +520,9 @@ class SlurmExecutor(Executor):
             timed_out = True
             exit_code = -9
             self._cancel_job(job)
-            logger.warning(
-                "SLURM job %s timed out for node %s", job.job_id, node_id[:8]
-            )
+            logger.warning("SLURM job %s timed out for node %s", job.job_id, node_id[:8])
         except Exception as exc:
-            logger.error(
-                "SLURM job %s failed for node %s: %s", job.job_id, node_id[:8], exc
-            )
+            logger.error("SLURM job %s failed for node %s: %s", job.job_id, node_id[:8], exc)
             if not stderr_path.exists():
                 stderr_path.write_text(f"SlurmExecutor error: {exc}\n")
             exit_code = 1
@@ -638,9 +657,7 @@ class SlurmExecutor(Executor):
             pending_indices = still_pending
 
             if pending_indices:
-                logger.info(
-                    "Batch Phase B: %d jobs still pending", len(pending_indices)
-                )
+                logger.info("Batch Phase B: %d jobs still pending", len(pending_indices))
 
         logger.info("Batch Phase B complete: all jobs reached terminal state")
 
@@ -671,9 +688,39 @@ class SlurmExecutor(Executor):
 
         return list(results)
 
-    async def _async_poll_job(
-        self, job: Any, timeout_sec: int | None, start_time: float
-    ) -> int:
+    def cancel_all(self, handles: list[SlurmJobHandle | dict]) -> None:
+        """Cancel all submitted SLURM jobs."""
+        for h in handles:
+            job = h.job if isinstance(h, SlurmJobHandle) else h["job"]
+            try:
+                self._cancel_job(job)
+            except Exception as e:
+                logger.warning("Failed to cancel job %s: %s", getattr(job, "job_id", "?"), e)
+
+    def poll_jobs(self, handles: list[SlurmJobHandle | dict]) -> list[str]:
+        """Return list of job statuses for each handle."""
+        statuses = []
+        for h in handles:
+            job = h.job if isinstance(h, SlurmJobHandle) else h["job"]
+            try:
+                statuses.append(str(job.state))
+            except Exception:
+                statuses.append("UNKNOWN")
+        return statuses
+
+    async def wait_all(self, handles: list[SlurmJobHandle | dict], timeout_sec: float | None = None) -> list[str]:
+        """Wait until all jobs finish or timeout, return final statuses."""
+        start = time.monotonic()
+        while True:
+            statuses = self.poll_jobs(handles)
+            terminal = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "UNKNOWN"}
+            if all(s in terminal for s in statuses):
+                return statuses
+            if timeout_sec is not None and (time.monotonic() - start) >= timeout_sec:
+                return statuses
+            await asyncio.sleep(self.poll_interval_sec)
+
+    async def _async_poll_job(self, job: Any, timeout_sec: int | None, start_time: float) -> int:
         """Async version of _poll_job using asyncio.sleep for polling.
 
         Uses sacct-based polling (via submitit) when sacct is available,
@@ -713,16 +760,16 @@ class SlurmExecutor(Executor):
                 pass
             return 1
 
-    async def _async_poll_job_squeue(
-        self, job: Any, timeout_sec: int | None, start_time: float
-    ) -> int:
+    async def _async_poll_job_squeue(self, job: Any, timeout_sec: int | None, start_time: float) -> int:
         """Async poll job status via squeue when sacct is unavailable."""
         job_id = str(job.job_id)
         while True:
             try:
                 result = subprocess.run(
                     ["squeue", "-j", job_id, "-h", "-o", "%T"],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 state = result.stdout.strip()
                 if not state:
@@ -775,9 +822,7 @@ class SlurmExecutor(Executor):
     def _check_sacct_available() -> bool:
         """Check whether sacct is available on this cluster."""
         try:
-            result = subprocess.run(
-                ["sacct", "--version"], capture_output=True, timeout=5
-            )
+            result = subprocess.run(["sacct", "--version"], capture_output=True, timeout=5)
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
@@ -829,7 +874,9 @@ class SlurmExecutor(Executor):
             try:
                 result = subprocess.run(
                     ["squeue", "-j", job_id, "-h", "-o", "%T"],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 state = result.stdout.strip()
                 if not state:

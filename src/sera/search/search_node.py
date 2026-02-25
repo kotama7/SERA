@@ -20,9 +20,7 @@ class SearchNode:
     node_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_id: str | None = None
     depth: int = 0
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     # External state
     hypothesis: str = ""

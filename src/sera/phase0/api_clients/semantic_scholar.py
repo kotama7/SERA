@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -44,8 +46,12 @@ def _parse_paper(raw: dict, source: str = "semantic_scholar") -> PaperResult | N
 class SemanticScholarClient(BaseScholarClient):
     """Async client for the Semantic Scholar Academic Graph API."""
 
+    API_NAME = "semantic_scholar"
+    ENDPOINT_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+
     def __init__(self, api_key: str | None = None) -> None:
         headers: dict[str, str] = {}
+        self._has_api_key = bool(api_key)
         if api_key:
             headers["x-api-key"] = api_key
         self._client = httpx.AsyncClient(
@@ -53,6 +59,8 @@ class SemanticScholarClient(BaseScholarClient):
             headers=headers,
             timeout=30.0,
         )
+        # Proactive rate limiting interval (seconds between requests)
+        self._rate_limit_delay = 1.0 if self._has_api_key else 3.0
 
     # -- retry decorator -------------------------------------------------------
     @staticmethod
@@ -70,8 +78,11 @@ class SemanticScholarClient(BaseScholarClient):
         query: str,
         limit: int = 20,
         year_from: int | None = None,
+        fields_of_study: list[str] | None = None,
+        offset: int = 0,
     ) -> list[PaperResult]:
-        return await self._search_inner(query, limit, year_from)
+        await asyncio.sleep(self._rate_limit_delay)
+        return await self._search_inner(query, limit, year_from, fields_of_study, offset)
 
     @retry(
         stop=stop_after_attempt(5),
@@ -84,6 +95,8 @@ class SemanticScholarClient(BaseScholarClient):
         query: str,
         limit: int = 20,
         year_from: int | None = None,
+        fields_of_study: list[str] | None = None,
+        offset: int = 0,
     ) -> list[PaperResult]:
         params: dict[str, str | int] = {
             "query": query,
@@ -92,6 +105,10 @@ class SemanticScholarClient(BaseScholarClient):
         }
         if year_from is not None:
             params["year"] = f"{year_from}-"
+        if fields_of_study:
+            params["fieldsOfStudy"] = ",".join(fields_of_study)
+        if offset > 0:
+            params["offset"] = offset
 
         resp = await self._client.get("/paper/search", params=params)
         resp.raise_for_status()
@@ -103,9 +120,8 @@ class SemanticScholarClient(BaseScholarClient):
                 results.append(paper)
         return results
 
-    async def get_references(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_references(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
+        await asyncio.sleep(self._rate_limit_delay)
         return await self._get_references_inner(paper_id, limit)
 
     @retry(
@@ -114,9 +130,7 @@ class SemanticScholarClient(BaseScholarClient):
         retry=retry_if_exception_type(httpx.HTTPStatusError),
         reraise=True,
     )
-    async def _get_references_inner(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def _get_references_inner(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         resp = await self._client.get(
             f"/paper/{paper_id}/references",
             params={"fields": FIELDS, "limit": limit},
@@ -130,9 +144,8 @@ class SemanticScholarClient(BaseScholarClient):
                 results.append(paper)
         return results
 
-    async def get_citations(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def get_citations(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
+        await asyncio.sleep(self._rate_limit_delay)
         return await self._get_citations_inner(paper_id, limit)
 
     @retry(
@@ -141,9 +154,7 @@ class SemanticScholarClient(BaseScholarClient):
         retry=retry_if_exception_type(httpx.HTTPStatusError),
         reraise=True,
     )
-    async def _get_citations_inner(
-        self, paper_id: str, limit: int = 20
-    ) -> list[PaperResult]:
+    async def _get_citations_inner(self, paper_id: str, limit: int = 20) -> list[PaperResult]:
         resp = await self._client.get(
             f"/paper/{paper_id}/citations",
             params={"fields": FIELDS, "limit": limit},

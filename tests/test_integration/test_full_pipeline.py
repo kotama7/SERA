@@ -1,4 +1,5 @@
 """Integration test: full pipeline with all mocks per §22.14."""
+
 import json
 from pathlib import Path
 
@@ -35,9 +36,16 @@ def full_workspace(tmp_path):
     """Create a fully initialized workspace with all specs."""
     workspace = tmp_path / "sera_workspace"
     dirs = [
-        "specs", "related_work/results", "related_work/teacher_papers",
-        "lineage/nodes", "runs", "logs", "checkpoints", "outputs/best",
-        "paper/figures", "docs/modules",
+        "specs",
+        "related_work/results",
+        "related_work/teacher_papers",
+        "lineage/nodes",
+        "runs",
+        "logs",
+        "checkpoints",
+        "outputs/best",
+        "paper/figures",
+        "docs/modules",
     ]
     for d in dirs:
         (workspace / d).mkdir(parents=True, exist_ok=True)
@@ -45,7 +53,12 @@ def full_workspace(tmp_path):
     # Create Input-1
     input1_data = {
         "version": 1,
-        "data": {"description": "Test data", "location": "./data/test.csv", "format": "csv", "size_hint": "small(<1GB)"},
+        "data": {
+            "description": "Test data",
+            "location": "./data/test.csv",
+            "format": "csv",
+            "size_hint": "small(<1GB)",
+        },
         "domain": {"field": "ML", "subfield": "classification"},
         "task": {"brief": "Test classification task", "type": "prediction"},
         "goal": {"objective": "maximize accuracy", "direction": "maximize", "baseline": "0.9"},
@@ -99,11 +112,16 @@ class TestSpecCreationAndFreezing:
 
         # Verify all spec files exist
         expected_files = [
-            "execution_spec.yaml", "execution_spec.yaml.lock",
-            "problem_spec.yaml", "model_spec.yaml",
-            "resource_spec.yaml", "plan_spec.yaml",
-            "paper_spec.yaml", "paper_score_spec.yaml",
-            "related_work_spec.yaml", "teacher_paper_set.yaml",
+            "execution_spec.yaml",
+            "execution_spec.yaml.lock",
+            "problem_spec.yaml",
+            "model_spec.yaml",
+            "resource_spec.yaml",
+            "plan_spec.yaml",
+            "paper_spec.yaml",
+            "paper_score_spec.yaml",
+            "related_work_spec.yaml",
+            "teacher_paper_set.yaml",
         ]
         for f in expected_files:
             assert (specs_dir / f).exists(), f"Missing: {f}"
@@ -258,10 +276,26 @@ class TestEvidenceStore:
         from sera.paper.evidence_store import EvidenceStore
 
         nodes = [
-            SearchNode(node_id="n1", hypothesis="Method A", experiment_config={"method": "A"},
-                       mu=0.8, se=0.02, lcb=0.76, feasible=True, status="evaluated"),
-            SearchNode(node_id="n2", hypothesis="Method B", experiment_config={"method": "B"},
-                       mu=0.7, se=0.03, lcb=0.64, feasible=True, status="evaluated"),
+            SearchNode(
+                node_id="n1",
+                hypothesis="Method A",
+                experiment_config={"method": "A"},
+                mu=0.8,
+                se=0.02,
+                lcb=0.76,
+                feasible=True,
+                status="evaluated",
+            ),
+            SearchNode(
+                node_id="n2",
+                hypothesis="Method B",
+                experiment_config={"method": "B"},
+                mu=0.7,
+                se=0.03,
+                lcb=0.64,
+                feasible=True,
+                status="evaluated",
+            ),
         ]
         evidence = EvidenceStore(
             best_node=nodes[0],
@@ -279,8 +313,14 @@ class TestFullWorkspaceStructure:
 
     def test_workspace_directories(self, full_workspace):
         expected_dirs = [
-            "specs", "related_work", "lineage", "runs",
-            "logs", "checkpoints", "outputs/best", "paper/figures",
+            "specs",
+            "related_work",
+            "lineage",
+            "runs",
+            "logs",
+            "checkpoints",
+            "outputs/best",
+            "paper/figures",
         ]
         for d in expected_dirs:
             assert (full_workspace / d).exists(), f"Missing directory: {d}"

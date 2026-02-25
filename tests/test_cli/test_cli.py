@@ -1,4 +1,5 @@
 """CLI integration tests using typer.testing.CliRunner."""
+
 import json
 from pathlib import Path
 
@@ -112,6 +113,67 @@ class TestShowNode:
         (tmp_path / "runs").mkdir(parents=True, exist_ok=True)
         result = runner.invoke(app, ["show-node", "nonexistent", "--work-dir", str(tmp_path)])
         assert result.exit_code == 0  # Prints error but doesn't crash
+
+
+class TestVisualize:
+    def test_visualize_help(self):
+        result = runner.invoke(app, ["visualize", "--help"])
+        assert result.exit_code == 0
+        assert "work-dir" in result.stdout
+
+    def test_visualize_invocation(self, tmp_path):
+        """sera visualize invokes run_visualize and handles missing checkpoints."""
+        work_dir = tmp_path / "workspace"
+        work_dir.mkdir()
+        (work_dir / "checkpoints").mkdir()
+        (work_dir / "outputs").mkdir()
+
+        # No checkpoints exist, should fail gracefully with SystemExit(1)
+        result = runner.invoke(app, ["visualize", "--work-dir", str(work_dir)])
+        # The command raises SystemExit(1) on FileNotFoundError
+        assert result.exit_code != 0
+
+    def test_visualize_with_checkpoint(self, tmp_path):
+        """sera visualize generates HTML when a checkpoint exists."""
+        work_dir = tmp_path / "workspace"
+        (work_dir / "checkpoints").mkdir(parents=True)
+        (work_dir / "outputs").mkdir(parents=True)
+        (work_dir / "runs").mkdir(parents=True)
+
+        # Write a minimal checkpoint
+        checkpoint = {
+            "step": 1,
+            "all_nodes": {
+                "node-1": {
+                    "node_id": "node-1",
+                    "parent_id": None,
+                    "depth": 0,
+                    "status": "evaluated",
+                    "branching_op": "draft",
+                    "hypothesis": "Test",
+                    "experiment_config": {},
+                    "mu": 0.8,
+                    "se": 0.01,
+                    "lcb": 0.78,
+                    "eval_runs": 3,
+                    "feasible": True,
+                    "priority": 0.78,
+                    "children_ids": [],
+                },
+            },
+            "open_list": [],
+            "closed_set": [],
+            "best_node_id": "node-1",
+            "ppo_buffer": [],
+        }
+        cp_path = work_dir / "checkpoints" / "search_state_step_1.json"
+        with open(cp_path, "w") as f:
+            json.dump(checkpoint, f, default=str)
+
+        result = runner.invoke(app, ["visualize", "--work-dir", str(work_dir)])
+        assert result.exit_code == 0
+        assert "Visualization generated" in result.stdout
+        assert (work_dir / "outputs" / "tree_visualization.html").exists()
 
 
 class TestHelp:

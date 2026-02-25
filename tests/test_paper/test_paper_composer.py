@@ -19,6 +19,7 @@ from sera.search.search_node import SearchNode
 # Helper factories
 # ---------------------------------------------------------------------------
 
+
 def _make_node(
     *,
     node_id: str = "node-1",
@@ -124,6 +125,7 @@ def _make_mock_llm():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestPaperDataclass:
     """Test the Paper dataclass."""
@@ -250,21 +252,13 @@ class TestCheckPaperIssues:
 
     def test_invalid_citation(self, tmp_path):
         composer = PaperComposer(output_dir=tmp_path)
-        content = (
-            "# Abstract\n# Introduction\n# Method\n"
-            "# Experiments\n# Results\n# Conclusion\n"
-            "\\cite{nonexistent}"
-        )
+        content = "# Abstract\n# Introduction\n# Method\n# Experiments\n# Results\n# Conclusion\n\\cite{nonexistent}"
         issues = composer._check_paper_issues(content, [], [])
         assert any("nonexistent" in i for i in issues)
 
     def test_unclosed_code_block(self, tmp_path):
         composer = PaperComposer(output_dir=tmp_path)
-        content = (
-            "# Abstract\n# Introduction\n# Method\n"
-            "# Experiments\n# Results\n# Conclusion\n"
-            "```python\ncode\n"
-        )
+        content = "# Abstract\n# Introduction\n# Method\n# Experiments\n# Results\n# Conclusion\n```python\ncode\n"
         issues = composer._check_paper_issues(content, [], [])
         assert any("code block" in i.lower() for i in issues)
 

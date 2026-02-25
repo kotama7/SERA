@@ -81,8 +81,8 @@ class FailureKnowledgeExtractor:
             node_id=failed_node.node_id,
             hypothesis=getattr(failed_node, "hypothesis", ""),
             error_category=error_category,
-            error_message=error_message[:self.summary_max_tokens],
-            lesson=lesson[:self.summary_max_tokens],
+            error_message=error_message[: self.summary_max_tokens],
+            lesson=lesson[: self.summary_max_tokens],
         )
 
     def inject(self, summary: FailureSummary, siblings: list[Any]) -> None:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +18,13 @@ class SearchConfig(BaseModel):
     max_debug_depth: int = Field(3, description="Maximum debug retries per node")
     lambda_cost: float = Field(0.1, description="Cost penalty coefficient in priority")
     beta_exploration: float = Field(0.05, description="Exploration bonus coefficient")
-    repeats: int = Field(3, description="Number of experimental repeats for full eval")
-    lcb_coef: float = Field(1.96, description="LCB coefficient (e.g. 1.96 for 95% CI)")
-    sequential_eval: bool = Field(True, description="Use sequential evaluation strategy")
-    sequential_eval_initial: int = Field(1, description="Initial seeds for quick estimation")
-    sequential_eval_topk: int = Field(5, description="Top-k nodes get full evaluation")
     sibling_context_k: int = Field(5, description="Number of sibling nodes in improve context")
     squash_depth: int | None = Field(None, description="Squash depth for lineage snapshots (default: max_depth // 2)")
     strategy: str = Field("best_first", description="Search algorithm name")
-    priority_rule: str = Field("lcb_cost_explore", description="Priority computation rule")
+    priority_rule: str = Field("epsilon_constraint_lcb", description="Priority computation rule")
+    slurm_batch_size: int = Field(5, description="Number of SLURM jobs to submit per batch")
+    slurm_max_concurrent: int = Field(10, description="Maximum concurrent SLURM jobs")
+    slurm_poll_interval_sec: float = Field(10.0, description="Seconds between SLURM job status polls")
     initial_root_children: int = Field(5, description="Root node draft count")
     min_diverse_methods: int = Field(3, description="Diversity threshold for draft re-trigger")
     draft_trigger_after: int = Field(10, description="Min evaluated nodes before diversity check")
@@ -131,12 +127,12 @@ class PruningConfig(BaseModel):
 class TerminationConfig(BaseModel):
     """When to stop the search."""
 
-    max_wall_time_hours: float = Field(4.0, description="Maximum wall-clock time in hours")
+    max_wall_time_hours: float | None = Field(None, description="Maximum wall-clock time in hours (None = unlimited)")
     max_total_experiments: int = Field(200, description="Maximum total experiments")
     target_score: float | None = Field(None, description="Stop if this score is reached")
     min_improvement: float = Field(0.001, description="Minimum improvement to consider progress")
     max_steps: int | None = Field(None, description="Maximum search steps (if None, use max_nodes)")
-    stop_on_plateau: bool = Field(False, description="Stop when improvement plateaus")
+    stop_on_plateau: bool = Field(True, description="Stop when improvement plateaus")
     plateau_patience: int = Field(10, description="Steps without improvement before plateau stop")
     plateau_min_improvement: float = Field(0.001, description="Minimum improvement to reset plateau counter")
     min_nodes_before_stop: int = Field(10, description="Minimum nodes before allowing termination")
@@ -183,12 +179,20 @@ class ExecutionSpecModel(BaseModel):
     lora_runtime: LoraRuntimeConfig = Field(default_factory=LoraRuntimeConfig, description="LoRA runtime settings")
     pruning: PruningConfig = Field(default_factory=PruningConfig, description="Pruning configuration")
     termination: TerminationConfig = Field(default_factory=TerminationConfig, description="Termination conditions")
-    paper_exec: PaperExecConfig = Field(default_factory=PaperExecConfig, description="Paper execution settings")
+    paper: PaperExecConfig = Field(default_factory=PaperExecConfig, description="Paper execution settings")
 
-    def compute_hash(self) -> str:
-        """Compute a deterministic SHA-256 hash of this spec for reproducibility."""
-        payload = json.dumps(self.model_dump(), sort_keys=True, default=str)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_paper_field(cls, data: Any) -> Any:
+        """Accept old paper_exec as alias for paper."""
+        if isinstance(data, dict) and "paper_exec" in data and "paper" not in data:
+            data["paper"] = data.pop("paper_exec")
+        return data
+
+    @property
+    def paper_exec(self) -> PaperExecConfig:
+        """Backward-compatible alias: ``paper_exec`` -> ``paper``."""
+        return self.paper
 
     # -- YAML helpers ----------------------------------------------------------
 

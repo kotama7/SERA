@@ -108,9 +108,7 @@ class TestToolExecutor:
     def test_unknown_tool(self, tool_executor):
         """Unknown tool returns error result."""
         tc = ToolCall(tool_name="nonexistent_tool", arguments={})
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is False
         assert "Unknown tool" in result.error
 
@@ -120,9 +118,7 @@ class TestToolExecutor:
             tool_name="read_file",
             arguments={"path": "runs/node-001/stdout.log"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True
         assert "output line 1" in result.output["content"]
         assert result.output["truncated"] is False
@@ -133,9 +129,7 @@ class TestToolExecutor:
             tool_name="read_file",
             arguments={"path": "runs/nonexistent/file.txt"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True  # handler itself succeeds
         assert result.output["content"] is None
         assert "not found" in result.output["error"].lower()
@@ -146,9 +140,7 @@ class TestToolExecutor:
             tool_name="write_file",
             arguments={"path": "runs/node-001/test_output.txt", "content": "hello world"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True
         assert result.output["success"] is True
         assert (workspace / "runs" / "node-001" / "test_output.txt").read_text() == "hello world"
@@ -159,9 +151,7 @@ class TestToolExecutor:
             tool_name="write_file",
             arguments={"path": "specs/execution_spec.yaml", "content": "hacked"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True  # handler succeeds but operation is denied
         assert result.output["success"] is False
         assert "blocked" in result.output["error"].lower() or "not allowed" in result.output["error"].lower()
@@ -172,9 +162,7 @@ class TestToolExecutor:
             tool_name="read_metrics",
             arguments={"node_id": "node-001"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True
         assert result.output["metrics"]["primary"]["value"] == 0.95
 
@@ -184,9 +172,7 @@ class TestToolExecutor:
             tool_name="read_experiment_log",
             arguments={"node_id": "node-001", "log_type": "stderr"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True
         assert "warning" in result.output["content"]
 
@@ -196,9 +182,7 @@ class TestToolExecutor:
             tool_name="list_directory",
             arguments={"path": "runs/node-001"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is True
         names = [e["name"] for e in result.output["entries"]]
         assert "experiment.py" in names
@@ -210,9 +194,7 @@ class TestToolExecutor:
             tool_name="read_file",
             arguments={"path": "../../../etc/passwd"},
         )
-        result = asyncio.get_event_loop().run_until_complete(
-            tool_executor.execute(tc)
-        )
+        result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
         assert result.success is False
         assert "Permission denied" in result.error or "traversal" in result.error.lower()
 
@@ -220,9 +202,7 @@ class TestToolExecutor:
         """State tools return error when SearchManager is None."""
         for tool_name in STATE_TOOLS:
             tc = ToolCall(tool_name=tool_name, arguments={"node_id": "x"})
-            result = asyncio.get_event_loop().run_until_complete(
-                tool_executor.execute(tc)
-            )
+            result = asyncio.get_event_loop().run_until_complete(tool_executor.execute(tc))
             assert result.success is True  # handler itself succeeds
             assert "error" in result.output
 
@@ -286,9 +266,42 @@ class TestStateToolsWithManager:
         """Create a mock SearchManager with test nodes."""
         from sera.search.search_node import SearchNode
 
-        node1 = SearchNode(node_id="n1", hypothesis="Test baseline", status="evaluated", mu=0.8, se=0.05, lcb=0.7, feasible=True, eval_runs=3, depth=0, branching_op="draft")
-        node2 = SearchNode(node_id="n2", hypothesis="Better approach", status="evaluated", mu=0.9, se=0.03, lcb=0.85, feasible=True, eval_runs=5, depth=1, branching_op="improve")
-        node3 = SearchNode(node_id="n3", hypothesis="Failed attempt", status="failed", mu=None, se=None, lcb=None, feasible=True, eval_runs=0, depth=1, branching_op="draft")
+        node1 = SearchNode(
+            node_id="n1",
+            hypothesis="Test baseline",
+            status="evaluated",
+            mu=0.8,
+            se=0.05,
+            lcb=0.7,
+            feasible=True,
+            eval_runs=3,
+            depth=0,
+            branching_op="draft",
+        )
+        node2 = SearchNode(
+            node_id="n2",
+            hypothesis="Better approach",
+            status="evaluated",
+            mu=0.9,
+            se=0.03,
+            lcb=0.85,
+            feasible=True,
+            eval_runs=5,
+            depth=1,
+            branching_op="improve",
+        )
+        node3 = SearchNode(
+            node_id="n3",
+            hypothesis="Failed attempt",
+            status="failed",
+            mu=None,
+            se=None,
+            lcb=None,
+            feasible=True,
+            eval_runs=0,
+            depth=1,
+            branching_op="draft",
+        )
 
         manager = SimpleNamespace(
             all_nodes={"n1": node1, "n2": node2, "n3": node3},
@@ -343,3 +356,211 @@ class TestStateToolsWithManager:
         assert result.output["best_lcb"] == 0.85
         assert result.output["status_counts"]["evaluated"] == 2
         assert result.output["status_counts"]["failed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Node tool_usage tracking tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolUsageTracking:
+    @pytest.fixture
+    def tracked_setup(self, workspace):
+        """Create a ToolExecutor with a mock SearchManager and a tracked node."""
+        from sera.search.search_node import SearchNode
+
+        node = SearchNode(node_id="tracked-001", hypothesis="Test", status="running")
+        manager = SimpleNamespace(all_nodes={"tracked-001": node})
+        te = ToolExecutor(workspace_dir=workspace, search_manager=manager)
+        te.set_current_node_id("tracked-001")
+        return te, node
+
+    def test_tool_usage_populated_on_success(self, tracked_setup, workspace):
+        """tool_usage is populated after successful tool calls."""
+        te, node = tracked_setup
+        # Create a test file
+        (workspace / "runs" / "tracked-001").mkdir(parents=True, exist_ok=True)
+        (workspace / "runs" / "tracked-001" / "test.txt").write_text("hello")
+
+        tc = ToolCall(tool_name="read_file", arguments={"path": "runs/tracked-001/test.txt"})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is True
+
+        assert node.tool_usage["total_tool_calls"] == 1
+        assert node.tool_usage["total_successes"] == 1
+        assert node.tool_usage["tool_success_rate"] == 1.0
+        assert "read_file" in node.tool_usage["tools_used"]
+        assert node.tool_usage["tools_used"]["read_file"]["calls"] == 1
+        assert node.tool_usage["tools_used"]["read_file"]["successes"] == 1
+
+    def test_tool_usage_tracks_failures(self, tracked_setup):
+        """tool_usage tracks failed tool calls."""
+        te, node = tracked_setup
+        tc = ToolCall(tool_name="read_file", arguments={"path": "../../../etc/passwd"})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is False
+
+        assert node.tool_usage["total_tool_calls"] == 1
+        assert node.tool_usage["total_successes"] == 0
+        assert node.tool_usage["tool_success_rate"] == 0.0
+
+    def test_tool_usage_accumulates(self, tracked_setup, workspace):
+        """tool_usage accumulates across multiple tool calls."""
+        te, node = tracked_setup
+        (workspace / "runs" / "tracked-001").mkdir(parents=True, exist_ok=True)
+
+        # Successful call
+        tc1 = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        asyncio.get_event_loop().run_until_complete(te.execute(tc1))
+
+        # Another successful call
+        tc2 = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        asyncio.get_event_loop().run_until_complete(te.execute(tc2))
+
+        # Failed call (path traversal)
+        tc3 = ToolCall(tool_name="read_file", arguments={"path": "../../../etc/passwd"})
+        asyncio.get_event_loop().run_until_complete(te.execute(tc3))
+
+        assert node.tool_usage["total_tool_calls"] == 3
+        assert node.tool_usage["total_successes"] == 2
+        assert node.tool_usage["tool_success_rate"] == pytest.approx(2 / 3)
+        assert node.tool_usage["tools_used"]["list_directory"]["calls"] == 2
+        assert node.tool_usage["tools_used"]["list_directory"]["successes"] == 2
+        assert node.tool_usage["tools_used"]["read_file"]["calls"] == 1
+        assert node.tool_usage["tools_used"]["read_file"]["successes"] == 0
+
+    def test_tool_usage_no_tracking_without_node_id(self, workspace):
+        """tool_usage is not populated when no current_node_id is set."""
+        from sera.search.search_node import SearchNode
+
+        node = SearchNode(node_id="n1", hypothesis="Test")
+        manager = SimpleNamespace(all_nodes={"n1": node})
+        te = ToolExecutor(workspace_dir=workspace, search_manager=manager)
+        # No set_current_node_id call
+
+        tc = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert node.tool_usage == {}
+
+    def test_tool_usage_no_tracking_without_search_manager(self, workspace):
+        """tool_usage is not populated when search_manager is None."""
+        te = ToolExecutor(workspace_dir=workspace)
+        te.set_current_node_id("some-id")
+
+        tc = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is True
+        # No crash — just no tracking
+
+    def test_set_current_node_id_clears(self, tracked_setup, workspace):
+        """Setting current_node_id to None stops tracking."""
+        te, node = tracked_setup
+
+        tc = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert node.tool_usage["total_tool_calls"] == 1
+
+        te.set_current_node_id(None)
+        asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        # Still 1 — no tracking after clearing
+        assert node.tool_usage["total_tool_calls"] == 1
+
+    def test_tool_usage_tracks_latency(self, tracked_setup):
+        """tool_usage records cumulative latency per tool."""
+        te, node = tracked_setup
+        tc = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        latency = node.tool_usage["tools_used"]["list_directory"]["total_latency_sec"]
+        assert latency > 0.0  # some positive latency
+
+
+# ---------------------------------------------------------------------------
+# MCP integration with ToolExecutor tests
+# ---------------------------------------------------------------------------
+
+
+class TestMCPIntegration:
+    def test_mcp_tool_dispatch(self, workspace):
+        """ToolExecutor dispatches to MCP provider for unknown tools."""
+        from sera.agent.mcp_client import MCPConfig, MCPToolProvider
+
+        provider = MCPToolProvider(MCPConfig(server_url="http://localhost:8080", name="test"))
+        provider.register_mock_tool("mcp_echo", lambda params: {"echoed": params.get("msg", "")})
+
+        te = ToolExecutor(workspace_dir=workspace)
+        te.add_mcp_provider(provider)
+
+        tc = ToolCall(tool_name="mcp_echo", arguments={"msg": "hello"})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is True
+        assert result.output == {"echoed": "hello"}
+
+    def test_mcp_tool_in_available_tools(self, workspace):
+        """MCP tools appear in available_tools()."""
+        from sera.agent.mcp_client import MCPConfig, MCPToolProvider
+
+        provider = MCPToolProvider(MCPConfig(server_url="http://localhost:8080"))
+        provider.register_mock_tool("mcp_tool", lambda p: None)
+
+        te = ToolExecutor(workspace_dir=workspace)
+        te.add_mcp_provider(provider)
+
+        all_tools = te.available_tools()
+        assert "mcp_tool" in all_tools
+        assert len(all_tools) == 19  # 18 built-in + 1 MCP
+
+    def test_mcp_tool_failure(self, workspace):
+        """Failed MCP tool calls return error result."""
+        from sera.agent.mcp_client import MCPConfig, MCPToolProvider
+
+        def bad_handler(params):
+            raise RuntimeError("MCP server error")
+
+        provider = MCPToolProvider(MCPConfig(server_url="http://localhost:8080"))
+        provider.register_mock_tool("mcp_bad", bad_handler)
+
+        te = ToolExecutor(workspace_dir=workspace)
+        te.add_mcp_provider(provider)
+
+        tc = ToolCall(tool_name="mcp_bad", arguments={})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is False
+        assert "MCP server error" in result.error
+
+    def test_mcp_tool_usage_tracked(self, workspace):
+        """MCP tool calls update node tool_usage."""
+        from sera.agent.mcp_client import MCPConfig, MCPToolProvider
+        from sera.search.search_node import SearchNode
+
+        node = SearchNode(node_id="mcp-node", hypothesis="Test")
+        manager = SimpleNamespace(all_nodes={"mcp-node": node})
+
+        provider = MCPToolProvider(MCPConfig(server_url="http://localhost:8080"))
+        provider.register_mock_tool("mcp_tool", lambda p: {"ok": True})
+
+        te = ToolExecutor(workspace_dir=workspace, search_manager=manager)
+        te.add_mcp_provider(provider)
+        te.set_current_node_id("mcp-node")
+
+        tc = ToolCall(tool_name="mcp_tool", arguments={})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is True
+        assert node.tool_usage["total_tool_calls"] == 1
+        assert "mcp_tool" in node.tool_usage["tools_used"]
+
+    def test_builtin_tools_take_priority(self, workspace):
+        """Built-in tools are dispatched before MCP tools with the same name."""
+        from sera.agent.mcp_client import MCPConfig, MCPToolProvider
+
+        provider = MCPToolProvider(MCPConfig(server_url="http://localhost:8080"))
+        # Register an MCP tool with same name as a built-in
+        provider.register_mock_tool("list_directory", lambda p: {"mcp": True})
+
+        te = ToolExecutor(workspace_dir=workspace)
+        te.add_mcp_provider(provider)
+
+        tc = ToolCall(tool_name="list_directory", arguments={"path": "."})
+        result = asyncio.get_event_loop().run_until_complete(te.execute(tc))
+        assert result.success is True
+        # Should use built-in handler, not MCP
+        assert "entries" in result.output  # built-in returns entries, MCP returns mcp

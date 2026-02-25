@@ -1,4 +1,5 @@
 """Phase 1: LLM-driven Spec generation."""
+
 from __future__ import annotations
 
 import json
@@ -47,19 +48,23 @@ class SpecBuilder:
             if parsed is not None:
                 try:
                     from sera.specs.problem_spec import ProblemSpecModel
+
                     spec = ProblemSpecModel(**parsed.get("problem_spec", parsed))
                     return spec.model_dump()
                 except Exception as e:
-                    logger.warning(f"ProblemSpec validation failed (attempt {attempt+1}): {e}")
+                    logger.warning(f"ProblemSpec validation failed (attempt {attempt + 1}): {e}")
                     prompt += f"\n\nPrevious attempt failed validation: {e}\nPlease fix and regenerate."
             else:
-                logger.warning(f"JSON parse failed (attempt {attempt+1})")
+                logger.warning(f"JSON parse failed (attempt {attempt + 1})")
 
         # Fallback: return defaults
         logger.warning("All ProblemSpec generation attempts failed, using defaults")
         from sera.specs.problem_spec import ProblemSpecModel
+
         defaults = ProblemSpecModel(
-            title=getattr(input1, "task", input1.get("task", {})).get("brief", "Research") if isinstance(input1, dict) else getattr(getattr(input1, "task", None), "brief", "Research"),
+            title=getattr(input1, "task", input1.get("task", {})).get("brief", "Research")
+            if isinstance(input1, dict)
+            else getattr(getattr(input1, "task", None), "brief", "Research"),
         )
         return defaults.model_dump()
 
@@ -69,7 +74,7 @@ class SpecBuilder:
 
         prompt = SPEC_GENERATION_PROMPT.format(
             context=f"Input-1: {json.dumps(input1 if isinstance(input1, dict) else input1.model_dump(), default=str)}\n"
-                    f"ProblemSpec: {json.dumps(problem_spec if isinstance(problem_spec, dict) else problem_spec.model_dump(), default=str)}",
+            f"ProblemSpec: {json.dumps(problem_spec if isinstance(problem_spec, dict) else problem_spec.model_dump(), default=str)}",
             spec_type="PlanSpec",
             schema_description=self._plan_spec_schema(),
         )
@@ -96,14 +101,16 @@ class SpecBuilder:
             if parsed is not None:
                 try:
                     from sera.specs.plan_spec import PlanSpecModel
+
                     spec = PlanSpecModel(**parsed.get("plan_spec", parsed))
                     return spec.model_dump()
                 except Exception as e:
-                    logger.warning(f"PlanSpec validation failed (attempt {attempt+1}): {e}")
+                    logger.warning(f"PlanSpec validation failed (attempt {attempt + 1}): {e}")
             else:
-                logger.warning(f"JSON parse failed (attempt {attempt+1})")
+                logger.warning(f"JSON parse failed (attempt {attempt + 1})")
 
         from sera.specs.plan_spec import PlanSpecModel
+
         return PlanSpecModel().model_dump()
 
     def build_model_spec(self, cli_args: dict) -> dict:
@@ -115,7 +122,10 @@ class SpecBuilder:
             CLI arguments including: base_model, dtype, agent_llm, rank, alpha.
         """
         from sera.specs.model_spec import (
-            ModelSpecModel, BaseModelConfig, AgentLLMConfig, AdapterSpec,
+            ModelSpecModel,
+            BaseModelConfig,
+            AgentLLMConfig,
+            AdapterSpec,
             infer_model_family,
         )
 
@@ -138,11 +148,10 @@ class SpecBuilder:
 
         # Use family-specific default target modules if available
         from sera.specs.model_spec import _DEFAULT_MODEL_FAMILIES
+
         default_targets = ["q_proj", "v_proj"]
         if family in _DEFAULT_MODEL_FAMILIES:
-            default_targets = _DEFAULT_MODEL_FAMILIES[family].get(
-                "default_target_modules", default_targets
-            )
+            default_targets = _DEFAULT_MODEL_FAMILIES[family].get("default_target_modules", default_targets)
 
         adapter_cfg = AdapterSpec(
             rank=cli_args.get("rank", 16),
@@ -167,8 +176,11 @@ class SpecBuilder:
             cpu_cores, gpu_type, gpu_required, timeout, no_web, work_dir.
         """
         from sera.specs.resource_spec import (
-            ResourceSpecModel, ComputeConfig, SandboxConfig,
-            StorageConfig, NetworkConfig,
+            ResourceSpecModel,
+            ComputeConfig,
+            SandboxConfig,
+            StorageConfig,
+            NetworkConfig,
         )
 
         compute_cfg = ComputeConfig(
@@ -207,8 +219,14 @@ class SpecBuilder:
             lr, clip, ppo_steps.
         """
         from sera.specs.execution_spec import (
-            ExecutionSpecModel, SearchConfig, EvaluationConfig,
+            ExecutionSpecModel,
+            SearchConfig,
+            EvaluationConfig,
             LearningConfig,
+            LoraRuntimeConfig,
+            PruningConfig,
+            TerminationConfig,
+            PaperExecConfig,
         )
 
         search_cfg = SearchConfig(
@@ -217,21 +235,35 @@ class SpecBuilder:
             branch_factor=cli_args.get("branch_factor", 3),
             lambda_cost=cli_args.get("lambda_cost", 0.1),
             beta_exploration=cli_args.get("beta", 0.05),
+            strategy=cli_args.get("strategy", "best_first"),
+        )
+        eval_cfg = EvaluationConfig(
             repeats=cli_args.get("repeats", 3),
             lcb_coef=cli_args.get("lcb_coef", 1.96),
             sequential_eval=not cli_args.get("no_sequential", False),
             sequential_eval_topk=cli_args.get("seq_topk", 5),
         )
-        eval_cfg = EvaluationConfig()
         learn_cfg = LearningConfig(
             lr=cli_args.get("lr", 1e-4),
             clip_range=cli_args.get("clip", 0.2),
             steps_per_update=cli_args.get("ppo_steps", 128),
+            kl_control=not cli_args.get("no_kl", False),
         )
+        lora_cfg = LoraRuntimeConfig(
+            squash_depth=cli_args.get("squash_depth", 6),
+            snapshot_on_topk=not cli_args.get("no_snapshot_topk", False),
+        )
+        pruning_cfg = PruningConfig()
+        term_cfg = TerminationConfig()
+        paper_cfg = PaperExecConfig()
         exec_spec = ExecutionSpecModel(
             search=search_cfg,
             evaluation=eval_cfg,
             learning=learn_cfg,
+            lora_runtime=lora_cfg,
+            pruning=pruning_cfg,
+            termination=term_cfg,
+            paper=paper_cfg,
         )
         return exec_spec.model_dump()
 
@@ -244,6 +276,7 @@ class SpecBuilder:
     def _parse_json(self, response: str) -> dict | None:
         """Extract JSON from LLM response."""
         import re
+
         match = re.search(r"```json\s*(.*?)\s*```", response, re.DOTALL)
         if match:
             try:

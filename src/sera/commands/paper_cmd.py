@@ -1,4 +1,5 @@
 """sera generate-paper and evaluate-paper command implementations."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +17,7 @@ def run_generate_paper(work_dir: str) -> None:
     specs_dir = workspace / "specs"
 
     from sera.specs import AllSpecs
+
     try:
         specs = AllSpecs.load_from_dir(specs_dir)
     except Exception as e:
@@ -38,6 +40,7 @@ def run_generate_paper(work_dir: str) -> None:
     # Load evaluated nodes if available
     from sera.search.search_node import SearchNode
     import json
+
     runs_dir = workspace / "runs"
     if runs_dir.exists():
         for node_dir in runs_dir.iterdir():
@@ -57,7 +60,7 @@ def run_generate_paper(work_dir: str) -> None:
                     evidence.all_evaluated_nodes.append(node)
 
     if evidence.all_evaluated_nodes:
-        evidence.all_evaluated_nodes.sort(key=lambda n: n.lcb or float('-inf'), reverse=True)
+        evidence.all_evaluated_nodes.sort(key=lambda n: n.lcb or float("-inf"), reverse=True)
         evidence.best_node = evidence.all_evaluated_nodes[0]
         evidence.top_nodes = evidence.all_evaluated_nodes[:5]
 
@@ -65,6 +68,7 @@ def run_generate_paper(work_dir: str) -> None:
     vlm = None
     if specs.model.vlm and specs.model.vlm.provider:
         from sera.paper.vlm_reviewer import VLMReviewer
+
         vlm = VLMReviewer(
             model=specs.model.vlm.model_id,
             provider=specs.model.vlm.provider,
@@ -74,6 +78,7 @@ def run_generate_paper(work_dir: str) -> None:
     from sera.paper.citation_searcher import CitationSearcher
     from sera.phase0.api_clients.semantic_scholar import SemanticScholarClient
     import os
+
     ss_client = SemanticScholarClient(api_key=os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
     citation_searcher = CitationSearcher(ss_client, agent_llm)
 
@@ -85,23 +90,41 @@ def run_generate_paper(work_dir: str) -> None:
 
     composer = PaperComposer(
         output_dir=paper_dir,
+        log_dir=log_dir,
     )
 
     console.print("[cyan]Generating paper (Phase 7)...[/cyan]")
     paper = asyncio.run(
         composer.compose(
-            evidence, specs.paper, specs.teacher_paper_set, agent_llm, vlm,
+            evidence,
+            specs.paper,
+            specs.teacher_paper_set,
+            agent_llm,
+            vlm,
             semantic_scholar_client=ss_client,
         )
     )
 
-    # Save paper
+    # Save paper (compose() already saves files, but ensure latest content is written)
     with open(paper_dir / "paper.md", "w") as f:
         f.write(paper.content)
 
     if paper.bib_entries:
         with open(paper_dir / "paper.bib", "w") as f:
-            f.write("\n\n".join(paper.bib_entries))
+            for entry in paper.bib_entries:
+                if isinstance(entry, dict):
+                    # Format dict entries as BibTeX
+                    key = entry.get("citation_key", "unknown")
+                    f.write(f"@article{{{key},\n")
+                    for field in ("title", "author", "year", "journal", "doi"):
+                        if entry.get(field):
+                            val = entry[field]
+                            if isinstance(val, list):
+                                val = " and ".join(val)
+                            f.write(f"  {field} = {{{val}}},\n")
+                    f.write("}\n\n")
+                else:
+                    f.write(str(entry) + "\n\n")
 
     console.print(f"[green]Paper generated: {paper_dir / 'paper.md'}[/green]")
     console.print("\nNext step: sera evaluate-paper")
@@ -119,6 +142,7 @@ def run_evaluate_paper(work_dir: str) -> None:
         raise SystemExit(1)
 
     from sera.specs import AllSpecs
+
     try:
         specs = AllSpecs.load_from_dir(specs_dir)
     except Exception as e:
@@ -138,25 +162,28 @@ def run_evaluate_paper(work_dir: str) -> None:
     with open(paper_md_path) as f:
         paper_md = f.read()
 
-    revision_limit = specs.execution.paper.paper_revision_limit
+    revision_limit = specs.execution.paper_exec.paper_revision_limit
 
     console.print("[cyan]Evaluating paper (Phase 8)...[/cyan]")
 
     for iteration in range(revision_limit):
         console.print(f"\n[cyan]Iteration {iteration + 1}/{revision_limit}[/cyan]")
 
-        result = asyncio.run(
-            evaluator.evaluate(paper_md, specs.paper_score, agent_llm)
-        )
+        result = asyncio.run(evaluator.evaluate(paper_md, specs.paper_score, agent_llm))
 
-        paper_logger.log({
-            "event": "paper_evaluation",
-            "iteration": iteration + 1,
-            "overall_score": result.overall_score,
-            "passed": result.passed,
-            "decision": result.decision,
-            "scores": {k: v.get("score") if isinstance(v, dict) else v for k, v in result.scores.items()},
-        })
+        paper_logger.log(
+            {
+                "event": "paper_evaluation",
+                "iteration": iteration + 1,
+                "overall_score": result.overall_score,
+                "passed": result.passed,
+                "decision": result.decision,
+                "scores": result.scores if isinstance(result.scores, dict) else {},
+                "missing_items": result.missing_items,
+                "actions_taken": result.improvement_instructions,
+                "additional_experiments_run": 0,
+            }
+        )
 
         console.print(f"  Score: {result.overall_score:.1f} / {specs.paper_score.max_score}")
         console.print(f"  Decision: {result.decision}")
@@ -171,10 +198,15 @@ def run_evaluate_paper(work_dir: str) -> None:
             console.print(f"  Applying {len(result.improvement_instructions)} improvements...")
             for instruction in result.improvement_instructions:
                 # Apply text revision via LLM
-                revision_prompt = f"Revise the following paper based on this instruction:\n{instruction}\n\nPaper:\n{paper_md}"
-                paper_md = asyncio.run(agent_llm.generate(
-                    revision_prompt, purpose="paper_revision",
-                ))
+                revision_prompt = (
+                    f"Revise the following paper based on this instruction:\n{instruction}\n\nPaper:\n{paper_md}"
+                )
+                paper_md = asyncio.run(
+                    agent_llm.generate(
+                        revision_prompt,
+                        purpose="paper_revision",
+                    )
+                )
 
         # Save revised version
         with open(paper_md_path, "w") as f:

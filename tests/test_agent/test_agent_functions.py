@@ -263,12 +263,14 @@ class TestSearchHandlers:
     def test_handle_search_debug_valid(self):
         from sera.agent.functions.search_functions import handle_search_debug
 
-        resp = json.dumps({
-            "hypothesis": "H",
-            "experiment_config": {},
-            "experiment_code": "print(1)",
-            "rationale": "Fixed",
-        })
+        resp = json.dumps(
+            {
+                "hypothesis": "H",
+                "experiment_config": {},
+                "experiment_code": "print(1)",
+                "rationale": "Fixed",
+            }
+        )
         result = handle_search_debug(resp)
         assert result is not None
         assert result["experiment_code"] == "print(1)"
@@ -436,35 +438,25 @@ class TestCallFunctionIntegration:
 
     async def test_call_function_search_draft(self, agent_llm):
         """call_function should invoke handler and return parsed result."""
-        mock_response = json.dumps([
-            {"hypothesis": "H1", "experiment_config": {"lr": 0.01}, "rationale": "R1"}
-        ])
+        mock_response = json.dumps([{"hypothesis": "H1", "experiment_config": {"lr": 0.01}, "rationale": "R1"}])
         agent_llm.set_mock(lambda prompt, purpose: mock_response)
 
-        result = await agent_llm.call_function(
-            "search_draft", prompt="test prompt"
-        )
+        result = await agent_llm.call_function("search_draft", prompt="test prompt")
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["hypothesis"] == "H1"
 
     async def test_call_function_experiment_code_gen(self, agent_llm):
         """CODE output mode should extract code block."""
-        agent_llm.set_mock(
-            lambda prompt, purpose: "Here:\n```python\nimport os\nprint('ok')\n```"
-        )
-        result = await agent_llm.call_function(
-            "experiment_code_gen", prompt="generate code"
-        )
+        agent_llm.set_mock(lambda prompt, purpose: "Here:\n```python\nimport os\nprint('ok')\n```")
+        result = await agent_llm.call_function("experiment_code_gen", prompt="generate code")
         assert "import os" in result
         assert "```" not in result
 
     async def test_call_function_free_text(self, agent_llm):
         """FREE_TEXT output mode should return stripped text."""
         agent_llm.set_mock(lambda prompt, purpose: "  Some review text  ")
-        result = await agent_llm.call_function(
-            "paper_review", prompt="review this"
-        )
+        result = await agent_llm.call_function("paper_review", prompt="review this")
         assert result == "Some review text"
 
     async def test_call_function_retry_on_exception(self, agent_llm):

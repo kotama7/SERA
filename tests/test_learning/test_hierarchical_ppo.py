@@ -71,14 +71,22 @@ class TestHierarchicalAdvantageEstimator:
 
         # Balanced turn rewards
         balanced = PPORolloutV2(
-            node_id="n1", prompt="p", response="r", log_prob=-1.0,
-            reward=0.8, value=0.5,
+            node_id="n1",
+            prompt="p",
+            response="r",
+            log_prob=-1.0,
+            reward=0.8,
+            value=0.5,
             turn_rewards={"phase3": 0.8, "phase4": 0.8},
         )
         # Imbalanced turn rewards
         imbalanced = PPORolloutV2(
-            node_id="n2", prompt="p", response="r", log_prob=-1.0,
-            reward=0.8, value=0.5,
+            node_id="n2",
+            prompt="p",
+            response="r",
+            log_prob=-1.0,
+            reward=0.8,
+            value=0.5,
             turn_rewards={"phase3": 1.0, "phase4": 0.0},
         )
         estimator.compute_hierarchical_advantages([balanced, imbalanced])
@@ -90,8 +98,12 @@ class TestHierarchicalAdvantageEstimator:
         config = _make_hiper_config()
         estimator = HierarchicalAdvantageEstimator(config)
         rollout = PPORollout(
-            node_id="n1", prompt="p", response="r", log_prob=-1.0,
-            reward=0.8, value=0.5,
+            node_id="n1",
+            prompt="p",
+            response="r",
+            log_prob=-1.0,
+            reward=0.8,
+            value=0.5,
         )
         turn_rewards_map = {"n1": {"phase3": 0.9, "phase4": 0.7}}
         estimator.compute_hierarchical_advantages([rollout], turn_rewards_map)
@@ -103,13 +115,21 @@ class TestHierarchicalAdvantageEstimator:
         config = _make_hiper_config()
         estimator = HierarchicalAdvantageEstimator(config)
         r1 = PPORolloutV2(
-            node_id="n1", prompt="p1", response="r1", log_prob=-1.0,
-            reward=0.9, value=0.5,
+            node_id="n1",
+            prompt="p1",
+            response="r1",
+            log_prob=-1.0,
+            reward=0.9,
+            value=0.5,
             turn_rewards={"phase3": 0.9, "phase4": 0.8},
         )
         r2 = PPORolloutV2(
-            node_id="n2", prompt="p2", response="r2", log_prob=-1.0,
-            reward=0.3, value=0.5,
+            node_id="n2",
+            prompt="p2",
+            response="r2",
+            log_prob=-1.0,
+            reward=0.3,
+            value=0.5,
             turn_rewards={"phase3": 0.2, "phase4": 0.1},
         )
         estimator.compute_hierarchical_advantages([r1, r2])
@@ -122,8 +142,12 @@ class TestHierarchicalAdvantageEstimator:
         config = _make_hiper_config(switch_weight=0.0, high_weight=1.0, low_weight=0.0)
         estimator = HierarchicalAdvantageEstimator(config)
         rollout = PPORolloutV2(
-            node_id="n1", prompt="p", response="r", log_prob=-1.0,
-            reward=0.8, value=0.5,
+            node_id="n1",
+            prompt="p",
+            response="r",
+            log_prob=-1.0,
+            reward=0.8,
+            value=0.5,
             turn_rewards={"phase3": 0.9},
         )
         estimator.compute_hierarchical_advantages([rollout])
@@ -136,8 +160,12 @@ class TestHierarchicalAdvantageEstimator:
         config = _make_hiper_config()
         estimator = HierarchicalAdvantageEstimator(config)
         rollout = PPORolloutV2(
-            node_id="n1", prompt="p", response="r", log_prob=-1.0,
-            reward=0.8, value=0.5,
+            node_id="n1",
+            prompt="p",
+            response="r",
+            log_prob=-1.0,
+            reward=0.8,
+            value=0.5,
             turn_rewards={"phase3": 0.9},
         )
         estimator.compute_hierarchical_advantages([rollout])

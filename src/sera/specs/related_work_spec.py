@@ -46,9 +46,7 @@ class BaselineCandidate(BaseModel):
 
     name: str = Field(..., description="Method name")
     paper_id: str = Field("", description="Source paper ID")
-    reported_metric: dict[str, Any] = Field(
-        default_factory=dict, description="Metric name -> reported value"
-    )
+    reported_metric: dict[str, Any] = Field(default_factory=dict, description="Metric name -> reported value")
     method_summary: str = Field("", description="Brief summary of the method")
 
 
@@ -74,9 +72,7 @@ class OpenProblem(BaseModel):
     """An open research problem identified from the literature."""
 
     description: str = Field(..., description="Description of the open problem")
-    related_paper_ids: list[str] = Field(
-        default_factory=list, description="Papers that discuss this problem"
-    )
+    related_paper_ids: list[str] = Field(default_factory=list, description="Papers that discuss this problem")
     severity: str = Field("medium", description="How critical this problem is")
 
 
@@ -85,17 +81,15 @@ class RelatedWorkSpecModel(BaseModel):
 
     papers: list[Paper] = Field(default_factory=list, description="All retrieved papers")
     clusters: list[Cluster] = Field(default_factory=list, description="Thematic clusters")
-    baseline_candidates: list[BaselineCandidate] = Field(
-        default_factory=list, description="Candidate baselines"
-    )
+    baseline_candidates: list[BaselineCandidate] = Field(default_factory=list, description="Candidate baselines")
     common_metrics: list[CommonMetric] = Field(
         default_factory=list, description="Metrics commonly reported in the field"
     )
-    common_datasets: list[CommonDataset] = Field(
-        default_factory=list, description="Commonly used datasets"
-    )
-    open_problems: list[OpenProblem] = Field(
-        default_factory=list, description="Identified open problems"
+    common_datasets: list[CommonDataset] = Field(default_factory=list, description="Commonly used datasets")
+    open_problems: list[OpenProblem] = Field(default_factory=list, description="Identified open problems")
+    selection_criteria: str = Field(
+        default="relevance_score >= 0.3",
+        description="Selection criteria expression used to filter papers",
     )
 
     # -- YAML helpers ----------------------------------------------------------

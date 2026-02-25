@@ -14,6 +14,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from sera.utils.hashing import compute_spec_hash
 from sera.specs import (
     AllSpecs,
     ExecutionSpecModel,
@@ -117,12 +118,12 @@ class TestDefaultInstantiation:
         spec = PaperSpecModel()
         assert spec.format == "arxiv"
         assert spec.max_pages == 12
-        assert len(spec.sections_required) == 7
+        assert len(spec.sections_required) == 9
 
     def test_paper_score(self):
         spec = PaperScoreSpecModel()
         assert spec.max_score == 10
-        assert len(spec.criteria) == 3
+        assert len(spec.criteria) == 7
         assert spec.ensemble.num_reviews_ensemble == 3
 
     def test_teacher_paper_set(self):
@@ -139,7 +140,7 @@ class TestDefaultInstantiation:
         spec = ModelSpecModel()
         assert spec.base_model.dtype == "bf16"
         assert spec.adapter_spec.rank == 16
-        assert spec.vlm.provider is None
+        assert spec.vlm.provider == "openai"
         assert spec.inference.engine == "transformers"
 
     def test_resource(self):
@@ -156,7 +157,7 @@ class TestDefaultInstantiation:
     def test_execution(self):
         spec = ExecutionSpecModel()
         assert spec.search.max_nodes == 100
-        assert spec.termination.max_wall_time_hours == 4.0
+        assert spec.termination.max_wall_time_hours is None
 
 
 # ---------------------------------------------------------------------------
@@ -301,28 +302,30 @@ class TestAllSpecs:
 
 
 class TestExecutionSpecHash:
-    """compute_hash() is deterministic and changes when the spec changes."""
+    """compute_spec_hash() is deterministic and changes when the spec changes."""
 
     def test_deterministic(self):
         spec = ExecutionSpecModel()
-        h1 = spec.compute_hash()
-        h2 = spec.compute_hash()
+        h1 = compute_spec_hash(spec.model_dump())
+        h2 = compute_spec_hash(spec.model_dump())
         assert h1 == h2
-        assert len(h1) == 64  # SHA-256 hex digest
+        assert h1.startswith("sha256:")
+        assert len(h1.removeprefix("sha256:")) == 64  # SHA-256 hex digest
 
     def test_same_values_same_hash(self):
         s1 = ExecutionSpecModel()
         s2 = ExecutionSpecModel()
-        assert s1.compute_hash() == s2.compute_hash()
+        assert compute_spec_hash(s1.model_dump()) == compute_spec_hash(s2.model_dump())
 
     def test_different_values_different_hash(self):
         s1 = ExecutionSpecModel()
         s2 = ExecutionSpecModel(search=SearchConfig(max_nodes=999))
-        assert s1.compute_hash() != s2.compute_hash()
+        assert compute_spec_hash(s1.model_dump()) != compute_spec_hash(s2.model_dump())
 
     def test_hash_is_hex_string(self):
-        h = ExecutionSpecModel().compute_hash()
-        int(h, 16)  # Should not raise
+        h = compute_spec_hash(ExecutionSpecModel().model_dump())
+        hex_part = h.removeprefix("sha256:")
+        int(hex_part, 16)  # Should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -360,9 +363,9 @@ class TestSubModels:
         assert mv.choices == ["sgd", "adam"]
         assert mv.range is None
 
-    def test_vlm_disabled_by_default(self):
+    def test_vlm_default_provider(self):
         v = VLMConfig()
-        assert v.provider is None
+        assert v.provider == "openai"
 
     def test_adapter_spec_defaults(self):
         a = AdapterSpec()
@@ -399,7 +402,7 @@ class TestNewExecutionSpecFields:
     def test_search_config_new_fields(self):
         sc = SearchConfig()
         assert sc.strategy == "best_first"
-        assert sc.priority_rule == "lcb_cost_explore"
+        assert sc.priority_rule == "epsilon_constraint_lcb"
         assert sc.initial_root_children == 5
         assert sc.min_diverse_methods == 3
         assert sc.draft_trigger_after == 10
@@ -441,7 +444,7 @@ class TestNewExecutionSpecFields:
 
     def test_termination_config_new_fields(self):
         tc = TerminationConfig()
-        assert tc.max_wall_time_hours == 4.0
+        assert tc.max_wall_time_hours is None
         assert tc.min_nodes_before_stop == 10
 
     def test_paper_exec_new_fields(self):

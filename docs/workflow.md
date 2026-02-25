@@ -470,6 +470,7 @@ PPO 学習は以下の**両方**を満たす場合にのみ有効:
 |------|---------|---------------|--------------|
 | `outcome_rm`（デフォルト） | `primary_value - penalties` | 従来の GAE | なし |
 | `mt_grpo` | `Σ(weight * turn_reward) - penalties` | 従来の GAE（ターン報酬反映済み） | `turn_rewards` 設定 |
+| `tool_aware` | `mt_grpo` + ツール効率ボーナス - 失敗ペナルティ | 従来の GAE | `tool_records`（PPORolloutV3） |
 | `hiper` | `mt_grpo` と同一 | 3 層階層的 Advantage 分解 | `turn_rewards` + `hiper` 設定 |
 
 ### ターンレベル報酬（MT-GRPO / HiPER）
@@ -650,13 +651,16 @@ prune_interval: 10  # デフォルト: 10 ステップごと
 
 **CLI**: `sera generate-paper`
 
-**エントリポイント**: `PaperComposer.compose()` -- 6 ステップパイプライン
+**エントリポイント**: `PaperComposer.compose()` -- 6 ステップパイプライン（+ オプションの auto-ablation）
 
 ### 処理フロー
 
 ```mermaid
 flowchart TD
-    S1["Step 1: ログ要約<br/>EvidenceStore からデータ集約"] --> S2["Step 2: 図表生成<br/>CI バーチャート, 収束曲線,<br/>探索木, アブレーション<br/>+ LLM 集約プロット"]
+    S1["Step 1: ログ要約<br/>EvidenceStore からデータ集約"] --> S1b{"ablation_runner<br/>提供?"}
+    S1b -->|はい| AB["Step 1b: Auto-ablation<br/>各操作変数をベースラインに<br/>リセットして効果測定"]
+    S1b -->|いいえ| S2
+    AB --> S2["Step 2: 図表生成<br/>CI バーチャート, 収束曲線,<br/>探索木, アブレーション<br/>+ LLM 集約プロット"]
     S2 --> S3["Step 3: 引用検索ループ<br/>Semantic Scholar 経由<br/>最大 20 ラウンド"]
     S3 --> S4["Step 4: VLM 図表説明<br/>（vlm_enabled=True 時のみ）"]
     S4 --> S5["Step 5: 論文本文生成<br/>アウトライン -> ドラフト -><br/>リフレクションループ（最大 3 回）"]
@@ -669,6 +673,12 @@ flowchart TD
 **Step 1: ログ要約**
 - `EvidenceStore` から実験サマリ、収束データ、アブレーションデータ、メイン結果テーブルを取得
 - `experiment_summaries.json` として出力
+
+**Step 1b: Auto-ablation**（オプション）
+- `ablation_runner` が提供された場合に実行
+- `AblationRunner.run_ablation(best_node)` で各操作変数を 1 つずつベースライン値にリセット
+- メトリクスの変化量（`metric_delta`）を測定し、各変数の貢献度を定量化
+- 結果を `evidence.add_ablation_data()` でエビデンスに追加
 
 **Step 2: 図表生成** (`FigureGenerator`)
 - CI バーチャート: 全評価済みノードの信頼区間付きバーグラフ
@@ -822,3 +832,26 @@ flowchart TD
 | `"local"` | `LocalExecutor` | ローカルサブプロセス実行（デフォルト） |
 | `"slurm"` | `SlurmExecutor` | SLURM ジョブスケジューラ経由 |
 | `"docker"` | `DockerExecutor` | Docker コンテナ内実行 |
+
+---
+
+## 探索木の可視化
+
+**CLI**: `sera visualize`
+
+**エントリポイント**: `visualize_cmd.run_visualize()`
+
+探索ループの完了後（またはチェックポイント保存後）に、探索木をインタラクティブな HTML として可視化できる。
+
+```bash
+sera visualize                    # 最新のチェックポイントを可視化
+sera visualize --step 50          # 特定ステップのチェックポイントを可視化
+sera visualize --output tree.html # 出力ファイル名を指定
+```
+
+内部処理:
+1. `TreeVisualizer.load_checkpoint()` でチェックポイント JSON を読み込み
+2. `build_tree_data()` でノード情報をツリー構造に整形（統計情報の計算含む）
+3. `generate_html()` で D3.js ベースのインタラクティブ HTML を生成
+
+ノードの色分け: ゴールド（top-k）、ライトコーラル（失敗）、ライトブルー（その他）。各ノードにマウスオーバーで仮説、メトリクス、ステータスを表示。
