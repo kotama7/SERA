@@ -1,6 +1,6 @@
 # SERA 要件定義書 — Phase 6: 系譜管理・剪定
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -84,7 +84,7 @@ def maybe_squash(lineage_manager, exec_spec):
 
     処理:
     1. materialize で全ウェイトを復元
-    2. snapshot.safetensors として保存
+    2. `snapshot.safetensors` として保存（ファイル名は `snapshot.safetensors` で統一）
     3. meta.json の is_snapshot = true に更新
     4. このノードより上の祖先のΔは不要にはしない（他の枝が参照する可能性）
     """

@@ -162,7 +162,7 @@ def run_evaluate_paper(work_dir: str) -> None:
     with open(paper_md_path) as f:
         paper_md = f.read()
 
-    revision_limit = specs.execution.paper_exec.paper_revision_limit
+    revision_limit = specs.execution.paper.paper_revision_limit
 
     console.print("[cyan]Evaluating paper (Phase 8)...[/cyan]")
 

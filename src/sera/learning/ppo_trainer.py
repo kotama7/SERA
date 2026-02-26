@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sera.learning.rollout import PPORollout, PPORolloutV2
+from sera.learning.rollout import PPORollout, PPORolloutV2, PPORolloutV3
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ class PPOTrainer:
         rollouts: list[PPORollout],
         agent_llm: Any,
         specs: Any,
+        all_nodes: dict | None = None,
     ) -> dict:
         """Run one PPO update cycle on the collected rollouts.
 
@@ -107,6 +108,8 @@ class PPOTrainer:
             Agent LLM instance (used for log-prob computation in full mode).
         specs : object
             Placeholder for additional spec references.
+        all_nodes : dict | None
+            Search tree nodes for resolving parent adapter IDs.
 
         Returns
         -------
@@ -123,7 +126,7 @@ class PPOTrainer:
         # Route advantage computation based on reward method
         self._compute_advantages_for_method(rollouts)
 
-        return await self._ppo_update_impl(rollouts, agent_llm, specs)
+        return await self._ppo_update_impl(rollouts, agent_llm, specs, all_nodes=all_nodes)
 
     def notify_step(self, current_best_lcb: float) -> None:
         """Notify the trainer of the current best LCB for plateau detection."""
@@ -182,6 +185,25 @@ class PPOTrainer:
             # Fallback to GAE if no hiper config
             logger.warning("HiPER method selected but no hiper config; falling back to GAE")
 
+        elif method == "tool_aware":
+            from sera.learning.tool_usage_learning import ToolCallRecord, compute_reward_tool_aware
+
+            for r in rollouts:
+                tool_records = []
+                if isinstance(r, PPORolloutV3) and r.tool_trajectory:
+                    for entry in r.tool_trajectory:
+                        if isinstance(entry, ToolCallRecord):
+                            tool_records.append(entry)
+                        elif isinstance(entry, dict):
+                            tool_records.append(ToolCallRecord(
+                                tool_name=entry.get("tool_name", ""),
+                                success=entry.get("success", False),
+                                latency_sec=entry.get("wall_time_sec", 0.0),
+                            ))
+                r.reward = compute_reward_tool_aware(r.reward, tool_records)
+            self._compute_gae(rollouts, self.gamma, self.gae_lambda)
+            return
+
         # outcome_rm and mt_grpo both use standard GAE
         self._compute_gae(rollouts, self.gamma, self.gae_lambda)
 
@@ -218,6 +240,7 @@ class PPOTrainer:
         rollouts: list[PPORollout],
         agent_llm: Any,
         specs: Any,
+        all_nodes: dict | None = None,
     ) -> dict:
         """Actual PPO implementation using trl/peft/accelerate primitives."""
         import numpy as np
@@ -249,6 +272,7 @@ class PPOTrainer:
                         Accelerator=Accelerator,
                         get_peft_model_state_dict=get_peft_model_state_dict,
                         entropy_from_logits=entropy_from_logits,
+                        all_nodes=all_nodes,
                     )
                     self.batch_size = original_batch_size
                     return result
@@ -283,6 +307,7 @@ class PPOTrainer:
         Accelerator: Any,
         get_peft_model_state_dict: Any,
         entropy_from_logits: Any,
+        all_nodes: dict | None = None,
     ) -> dict:
         """Core PPO logic, separated for sleep/wake wrapping."""
 
@@ -296,6 +321,27 @@ class PPOTrainer:
         model = agent_llm._model
         if model is None:
             raise RuntimeError("Local model not initialised for PPO update")
+
+        # Validate LoRA compatibility before update
+        try:
+            from sera.specs.model_spec import validate_lora_compatibility
+
+            model_config_dict = {
+                "hidden_size": getattr(model.config, "hidden_size", 0),
+                "num_attention_heads": getattr(model.config, "num_attention_heads", 0),
+                "num_hidden_layers": getattr(model.config, "num_hidden_layers", 0),
+                "model_type": getattr(model.config, "model_type", ""),
+            }
+            lora_config_dict = {
+                "rank": getattr(self, "lora_rank", getattr(getattr(self.exec_spec, "learning", None), "rank", 16)),
+                "alpha": getattr(self, "lora_alpha", getattr(getattr(self.exec_spec, "learning", None), "alpha", 32)),
+                "target_modules": getattr(self, "target_modules", []),
+            }
+            is_compat, issues = validate_lora_compatibility(model_config_dict, lora_config_dict)
+            if not is_compat:
+                logger.warning("LoRA compatibility issues: %s", issues)
+        except Exception as e:
+            logger.debug("LoRA compatibility check skipped: %s", e)
 
         lora_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" in n.lower()]
         if not lora_params:
@@ -401,10 +447,16 @@ class PPOTrainer:
             delta_tensors = {k: post_weights[k] - pre_weights[k] for k in pre_weights}
             new_adapter_node_id = str(uuid.uuid4())
 
-            # Determine parent adapter_node_id from the first rollout's node
+            # Determine parent adapter_node_id from the best rollout's node (§6.7:
+            # "PPO更新対象のノード群の「最良ノード」の親LoRAをベースに更新")
             parent_adapter_id = "adapter_root"
-            first_node_id = rollouts[0].node_id if rollouts else None
-            # Parent adapter will be resolved by caller via search_manager
+            if rollouts and all_nodes:
+                best_rollout = max(rollouts, key=lambda r: r.reward)
+                best_node = all_nodes.get(best_rollout.node_id)
+                if best_node and getattr(best_node, "parent_id", None):
+                    parent_node = all_nodes.get(best_node.parent_id)
+                    if parent_node and getattr(parent_node, "adapter_node_id", None):
+                        parent_adapter_id = parent_node.adapter_node_id
 
             adapter_spec_hash = getattr(
                 getattr(self.model_spec, "compatibility", None),
@@ -426,7 +478,7 @@ class PPOTrainer:
                     adapter_node_id=new_adapter_node_id,
                     parent_id=parent_adapter_id,
                     delta_tensors=delta_tensors,
-                    search_node_id=first_node_id or "",
+                    search_node_id=best_rollout.node_id if rollouts else "",
                     depth=adapter_depth,
                     adapter_spec_hash=adapter_spec_hash,
                 )

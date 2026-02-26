@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol, runtime_checkable
 
 from sera.commands.wizard.i18n import MESSAGES, get_message
 from sera.commands.wizard.state import WizardState
@@ -25,9 +25,35 @@ from sera.commands.wizard.steps import (
     step10_specs,
     step11_freeze,
 )
-from sera.commands.wizard.ui import NavigateBack, NavigateGoto, console
+from sera.commands.wizard.ui import NavigateBack, NavigateGoto, QuitWizard, console
 
 from rich.panel import Panel
+
+
+# ---------------------------------------------------------------------------
+# Step protocols — document expected signatures for wizard step functions
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class WizardStep(Protocol):
+    """Protocol for Phase A wizard steps (Steps 1-7).
+
+    Accepts the wizard state and language code. May raise
+    NavigateBack, NavigateGoto, or QuitWizard for navigation.
+    """
+
+    def __call__(self, state: WizardState, lang: str) -> None: ...
+
+
+@runtime_checkable
+class WizardStepWithDir(Protocol):
+    """Protocol for Phase B/C wizard steps (Steps 8-11).
+
+    Like WizardStep but also receives the workspace directory.
+    """
+
+    def __call__(self, state: WizardState, lang: str, work_dir: Path) -> None: ...
 
 
 # Phase A steps (Steps 1-6): signature is (state, lang)
@@ -95,6 +121,9 @@ class WizardRunner:
         else:
             self.state.current_step = 1
 
+        # Persist language choice in state
+        self.state.lang = self.lang
+
         console.print(Panel(get_message("welcome", self.lang), style="bold blue"))
 
         # Phase A: Input-1 construction (Steps 1-7)
@@ -127,6 +156,7 @@ class WizardRunner:
             self.state.current_step = i
             try:
                 PHASE_A_STEPS[i - 1](self.state, self.lang)
+                self.state.mark_step_completed(i)
                 self.state.save()
                 i += 1
             except NavigateBack:
@@ -139,7 +169,7 @@ class WizardRunner:
                     i = e.step
                     console.print(f"  Jumping to Step {i}...")
                 continue
-            except (KeyboardInterrupt, EOFError):
+            except (KeyboardInterrupt, EOFError, QuitWizard):
                 self._save_and_exit()
 
         # Step 7: Preview (special — returns bool or int)
@@ -157,8 +187,9 @@ class WizardRunner:
                     self.state.save()
                     console.print("  Restarting from Step 1...")
                     return self._run_phase_a_restart()
+                self.state.mark_step_completed(7)
                 self.state.save()
-            except (KeyboardInterrupt, EOFError):
+            except (KeyboardInterrupt, EOFError, QuitWizard):
                 self._save_and_exit()
 
     def _run_phase_a_restart(self) -> None:
@@ -193,6 +224,7 @@ class WizardRunner:
             self.state.current_step = step_num
             try:
                 fn(self.state, self.lang, self.work_dir)
+                self.state.mark_step_completed(step_num)
                 self.state.save()
             except NavigateBack:
                 if step_num > min_step:
@@ -204,7 +236,7 @@ class WizardRunner:
                 self.state.current_step = e.step
                 self.state.save()
                 return self._restart_from_current()
-            except (KeyboardInterrupt, EOFError):
+            except (KeyboardInterrupt, EOFError, QuitWizard):
                 self._save_and_exit()
 
     def _restart_from_current(self) -> None:
@@ -227,7 +259,10 @@ class WizardRunner:
         self.state = runner.state
 
     def _save_and_exit(self) -> None:
-        """Save state and exit gracefully on Ctrl+C or EOF."""
+        """Save state and exit gracefully on Ctrl+C, EOF, or quit command.
+
+        Uses exit code 20 (SERA convention for user interrupt / graceful stop).
+        """
         self.state.save()
         console.print(f"\n  {get_message('state_saved', self.lang)}")
-        sys.exit(0)
+        sys.exit(20)

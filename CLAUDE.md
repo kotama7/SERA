@@ -12,6 +12,9 @@ SERA (Self-Evolving Research Agent) is a Python autonomous research system that 
 # Install in development mode (GPU available locally)
 pip install -e ".[dev]"
 
+# Optional extras: slurm, docker, vllm (local LLM inference), latex (paper generation)
+pip install -e ".[dev,slurm]"
+
 # SLURM cluster: install on GPU node to get CUDA-enabled PyTorch
 srun --partition=<gpu-partition> --time=01:00:00 bash scripts/setup_env.sh
 source .venv/bin/activate
@@ -108,7 +111,7 @@ AgentFunction (schema/registry)
 
 **AgentFunction / REGISTRY** (`agent/agent_functions.py`): Every structured LLM call is defined as a frozen `AgentFunction` dataclass with `name`, `parameters` (JSON Schema), `return_schema`, `output_mode` (`JSON`/`CODE`/`FREE_TEXT`), `phase`, `default_temperature`, `max_retries`, and a `handler` callable. Functions are registered via `@register_function` decorator into the module-level `REGISTRY` singleton. Importing `sera.agent.functions` triggers all sub-module registrations (side-effect imports). REGISTRY can convert to OpenAI/Anthropic tool formats or inject schemas into prompts.
 
-**19 registered functions** across 6 sub-modules in `agent/functions/`: `phase0_functions` (2), `search_functions` (3), `execution_functions` (1), `spec_functions` (2), `paper_functions` (6), `evaluation_functions` (3).
+**19 registered functions** across 6 sub-modules in `agent/functions/`: `phase0_functions` (2), `search_functions` (3), `execution_functions` (1), `spec_functions` (2), `paper_functions` (8), `evaluation_functions` (3).
 
 **`AgentLLM.call_function(function_name, prompt, ...)`** is the primary entry point for structured LLM calls. It looks up the function in REGISTRY, uses native tool-calling for API providers (OpenAI/Anthropic) when `return_schema` is defined, injects schema into prompt text for local providers, applies the function's `handler`, validates output, and retries up to `max_retries` (temperature += 0.1 per retry). This supersedes raw `generate()` for all schema-validated calls.
 
@@ -217,6 +220,7 @@ sera research               # Run Phases 2-6 loop
 sera generate-paper         # Phase 7
 sera evaluate-paper         # Phase 8
 sera export-best            # Export best artifacts
+sera visualize              # Generate interactive HTML visualization of search tree (--step N)
 sera status                 # Show search tree status
 sera show-node <id>         # Show node details
 sera replay <id> <seed>     # Replay experiment

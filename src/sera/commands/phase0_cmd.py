@@ -12,6 +12,95 @@ from rich.console import Console
 console = Console()
 
 
+def _build_dynamic_paper_spec(input1, output):
+    """Build PaperSpec dynamically customised from Phase 0 teacher paper analysis."""
+    from sera.specs.paper_spec import (
+        PaperSpecModel,
+        SectionRequirement,
+        FigureRequirement,
+    )
+
+    # Start with defaults
+    spec = PaperSpecModel()
+
+    # Customise sections based on teacher paper metadata
+    teacher_set = getattr(output, "teacher_paper_set", None)
+    structure = getattr(teacher_set, "structure_summary", None) if teacher_set else None
+
+    if structure:
+        # If teacher papers commonly have specific sections, add must_contain hints
+        common_pattern = getattr(structure, "common_experiment_pattern", "")
+        common_stats = getattr(structure, "common_stats_format", "")
+
+        if common_pattern:
+            for sec in spec.sections_required:
+                if sec.key == "experiments" and common_pattern not in sec.must_contain:
+                    sec.must_contain.append(common_pattern)
+        if common_stats:
+            for sec in spec.sections_required:
+                if sec.key == "results" and common_stats not in sec.must_contain:
+                    sec.must_contain.append(common_stats)
+
+    # Customise figures based on domain/task type
+    task_type = getattr(getattr(input1, "task", None), "type", "")
+
+    if task_type == "comparison":
+        # Comparison tasks benefit from comparison tables
+        has_comparison = any(f.type == "comparison_table" for f in spec.figures_required)
+        if not has_comparison:
+            spec.figures_required.append(
+                FigureRequirement(type="comparison_table", description="Comparison table of all methods")
+            )
+    elif task_type == "generation":
+        # Generation tasks benefit from sample outputs
+        has_samples = any(f.type == "sample_outputs" for f in spec.figures_required)
+        if not has_samples:
+            spec.figures_required.append(
+                FigureRequirement(type="sample_outputs", description="Qualitative examples of generated outputs")
+            )
+
+    # Adjust domain-specific must_contain for related_work section
+    domain_field = getattr(getattr(input1, "domain", None), "field", "")
+    if domain_field:
+        for sec in spec.sections_required:
+            if sec.key == "related_work" and domain_field not in sec.must_contain:
+                sec.must_contain.append(domain_field)
+
+    return spec
+
+
+def _build_dynamic_paper_score_spec(input1):
+    """Build PaperScoreSpec dynamically customised based on research domain and task type."""
+    from sera.specs.paper_score_spec import PaperScoreSpecModel
+
+    spec = PaperScoreSpecModel()
+
+    task_type = getattr(getattr(input1, "task", None), "type", "")
+
+    # Adjust criteria weights based on task type
+    weight_adjustments = {
+        "optimization": {"statistical_rigor": 0.25, "ablation_quality": 0.20, "baseline_coverage": 0.15},
+        "prediction": {"statistical_rigor": 0.25, "baseline_coverage": 0.20, "reproducibility": 0.15},
+        "generation": {"contribution_clarity": 0.20, "writing_quality": 0.15, "baseline_coverage": 0.15},
+        "analysis": {"statistical_rigor": 0.25, "writing_quality": 0.15, "limitations_honesty": 0.15},
+        "comparison": {"baseline_coverage": 0.25, "statistical_rigor": 0.20, "ablation_quality": 0.15},
+    }
+
+    if task_type in weight_adjustments:
+        adjustments = weight_adjustments[task_type]
+        for criterion in spec.criteria:
+            if criterion.name in adjustments:
+                criterion.weight = adjustments[criterion.name]
+
+        # Normalize weights to sum to 1.0
+        total = sum(c.weight for c in spec.criteria)
+        if total > 0:
+            for criterion in spec.criteria:
+                criterion.weight = round(criterion.weight / total, 3)
+
+    return spec
+
+
 def run_phase0(
     work_dir: str,
     topk: int,
@@ -80,7 +169,7 @@ def run_phase0(
             elif name == "arxiv":
                 clients.append(ArxivClient())
             elif name == "web":
-                serpapi_key = _get_api_key("SERPAPI_API_KEY", "web_search")
+                serpapi_key = _get_api_key("SERPAPI_API_KEY", "serpapi")
                 if serpapi_key:
                     clients.append(WebSearchClient(api_key=serpapi_key))
         except Exception as e:
@@ -145,23 +234,25 @@ def run_phase0(
             allow_unicode=True,
         )
 
-    # paper_spec.yaml -- PaperSpecModel defaults (Phase 0 doesn't customise this)
+    # paper_spec.yaml -- dynamically customised based on Phase 0 analysis
     from sera.specs.paper_spec import PaperSpecModel
 
+    paper_spec = _build_dynamic_paper_spec(input1, output)
     with open(specs_dir / "paper_spec.yaml", "w") as f:
         yaml.dump(
-            {"paper_spec": PaperSpecModel().model_dump()},
+            {"paper_spec": paper_spec.model_dump()},
             f,
             default_flow_style=False,
             allow_unicode=True,
         )
 
-    # paper_score_spec.yaml -- PaperScoreSpecModel defaults
+    # paper_score_spec.yaml -- dynamically customised based on Phase 0 analysis
     from sera.specs.paper_score_spec import PaperScoreSpecModel
 
+    paper_score_spec = _build_dynamic_paper_score_spec(input1)
     with open(specs_dir / "paper_score_spec.yaml", "w") as f:
         yaml.dump(
-            {"paper_score_spec": PaperScoreSpecModel().model_dump()},
+            {"paper_score_spec": paper_score_spec.model_dump()},
             f,
             default_flow_style=False,
             allow_unicode=True,

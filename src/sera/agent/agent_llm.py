@@ -25,6 +25,7 @@ class ToolCall:
     tool_name: str
     arguments: dict[str, Any] = field(default_factory=dict)
     call_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    reasoning: str = ""
 
 
 @dataclass
@@ -256,9 +257,16 @@ class AgentLLM:
                     elif isinstance(override, dict):
                         effective_loop_config = {k: v for k, v in override.items() if v is not None}
 
-        # AgentLoop branching: if the function has allowed_tools and we have a tool executor,
-        # delegate to the AgentLoop for multi-step reasoning
-        if effective_allowed_tools is not None and self._tool_executor is not None:
+        # AgentLoop branching: if the function has allowed_tools, we have a tool executor,
+        # and tools are enabled in PlanSpec, delegate to the AgentLoop for multi-step reasoning
+        tools_enabled = True
+        if self._plan_spec is not None:
+            ac = getattr(self._plan_spec, "agent_commands", None)
+            if ac is not None:
+                tools_cfg = getattr(ac, "tools", None)
+                if tools_cfg is not None:
+                    tools_enabled = getattr(tools_cfg, "enabled", True)
+        if effective_allowed_tools is not None and self._tool_executor is not None and tools_enabled:
             from sera.agent.agent_loop import AgentLoop, AgentLoopConfig
 
             loop_cfg_dict = effective_loop_config or {}
@@ -564,6 +572,22 @@ class AgentLLM:
         )
         return result
 
+    async def generate_full(
+        self,
+        prompt: str,
+        purpose: str,
+        adapter_node_id: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> GenerationOutput:
+        """Generate text and return a structured GenerationOutput (per spec §4.3.1).
+
+        Wraps ``generate()`` into a ``GenerationOutput`` for callers that need
+        the richer interface (e.g., log-prob tracking, tool_calls field).
+        """
+        text = await self.generate(prompt, purpose, adapter_node_id, temperature, max_tokens)
+        return GenerationOutput(text=text, purpose=purpose)
+
     def _log_call(
         self,
         prompt: str,
@@ -602,9 +626,9 @@ class AgentLLM:
             "prompt_hash": prompt_hash,
             "response_hash": response_hash,
             "latency_ms": round(latency_ms, 1),
+            "phase": phase,
+            "turn_rewards": None,
         }
-        if phase is not None:
-            entry["phase"] = phase
         if tool_calls:
             entry["tool_calls"] = [
                 {"tool_name": tc.tool_name, "call_id": tc.call_id} if hasattr(tc, "tool_name") else str(tc)

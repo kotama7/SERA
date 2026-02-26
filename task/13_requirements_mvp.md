@@ -1,6 +1,6 @@
 # SERA 要件定義書 — 非機能要件・受け入れ基準・MVP
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 

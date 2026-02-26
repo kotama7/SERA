@@ -48,6 +48,8 @@ _DRAFT_RETURN_SCHEMA: dict = {
     phase="search",
     default_temperature=0.7,
     max_retries=3,
+    allowed_tools=["get_node_info", "list_nodes", "read_metrics"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_search_draft(response: str) -> list[dict]:
     """Parse draft proposals from LLM response."""
@@ -96,6 +98,8 @@ _DEBUG_RETURN_SCHEMA: dict = {
     phase="search",
     default_temperature=0.5,
     max_retries=3,
+    allowed_tools=["read_experiment_log", "read_file", "execute_code_snippet"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_search_debug(response: str) -> dict | None:
     """Parse a debug fix from LLM response."""
@@ -144,6 +148,8 @@ _IMPROVE_RETURN_SCHEMA: dict = {
     phase="search",
     default_temperature=0.7,
     max_retries=3,
+    allowed_tools=["get_best_node", "read_metrics", "get_search_stats"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_search_improve(response: str) -> list[dict]:
     """Parse improvement proposals from LLM response."""

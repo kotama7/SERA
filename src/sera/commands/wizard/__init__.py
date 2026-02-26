@@ -16,18 +16,21 @@ Package structure:
 
 from sera.commands.wizard.env_detect import detect_environment
 from sera.commands.wizard.i18n import MESSAGES, TOTAL_STEPS, get_message
-from sera.commands.wizard.runner import WizardRunner
+from sera.commands.wizard.runner import WizardRunner, WizardStep, WizardStepWithDir
 from sera.commands.wizard.state import WizardState
 from sera.commands.wizard.steps.step4_goal import estimate_direction
-from sera.commands.wizard.ui import NavigateBack, NavigateGoto, console
+from sera.commands.wizard.ui import NavigateBack, NavigateGoto, QuitWizard, console
 
 __all__ = [
     "MESSAGES",
     "TOTAL_STEPS",
     "NavigateBack",
     "NavigateGoto",
+    "QuitWizard",
     "WizardRunner",
     "WizardState",
+    "WizardStep",
+    "WizardStepWithDir",
     "console",
     "detect_environment",
     "estimate_direction",

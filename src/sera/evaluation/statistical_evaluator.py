@@ -113,9 +113,8 @@ class StatisticalEvaluator(Evaluator):
                 if result.exit_code == -7:
                     node.status = "oom"
                     node.error_message = f"Out of memory: {stderr_content}"
-                    node.total_cost = getattr(getattr(self.execution_spec, "pruning", None), "budget_limit", None)
-                    budget_cfg = node.total_cost
-                    if hasattr(budget_cfg, "limit") and budget_cfg.limit is not None:
+                    budget_cfg = getattr(getattr(self.execution_spec, "pruning", None), "budget_limit", None)
+                    if budget_cfg is not None and hasattr(budget_cfg, "limit") and budget_cfg.limit is not None:
                         node.total_cost = budget_cfg.limit
                     else:
                         node.total_cost = timeout
@@ -144,14 +143,18 @@ class StatisticalEvaluator(Evaluator):
         if self.eval_logger:
             self.eval_logger.log(
                 {
-                    "event": "node_evaluated",
+                    "event": "evaluation_complete",
                     "node_id": node.node_id,
                     "mu": node.mu,
                     "se": node.se,
                     "lcb": node.lcb,
+                    "ucb": getattr(node, "ucb", None),
                     "n_repeats_done": node.eval_runs,
+                    "repeat_idx": node.eval_runs - 1,
                     "feasible": node.feasible,
                     "wall_time_sec": node.wall_time_sec,
+                    "cost_sec": node.wall_time_sec,
+                    "metrics": node.metrics_raw[-1] if node.metrics_raw else None,
                 }
             )
 
@@ -224,14 +227,18 @@ class StatisticalEvaluator(Evaluator):
         if self.eval_logger:
             self.eval_logger.log(
                 {
-                    "event": "node_evaluated_full",
+                    "event": "evaluation_complete",
                     "node_id": node.node_id,
                     "mu": node.mu,
                     "se": node.se,
                     "lcb": node.lcb,
+                    "ucb": getattr(node, "ucb", None),
                     "n_repeats_done": node.eval_runs,
+                    "repeat_idx": node.eval_runs - 1,
                     "feasible": node.feasible,
                     "wall_time_sec": node.wall_time_sec,
+                    "cost_sec": node.wall_time_sec,
+                    "metrics": node.metrics_raw[-1] if node.metrics_raw else None,
                 }
             )
 
@@ -293,8 +300,13 @@ def update_stats(
 
     values = []
     for m in node.metrics_raw:
-        if isinstance(m, dict) and metric_name in m:
-            values.append(float(m[metric_name]))
+        if isinstance(m, dict):
+            # Support both nested m["primary"]["value"] and flat m[metric_name] formats
+            primary = m.get("primary")
+            if isinstance(primary, dict) and "value" in primary:
+                values.append(float(primary["value"]))
+            elif metric_name in m:
+                values.append(float(m[metric_name]))
         elif isinstance(m, (int, float)):
             values.append(float(m))
 

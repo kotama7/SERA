@@ -1,23 +1,23 @@
 # SERA 要件定義書 — Agent Function System
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
-## 28. Agent Function System
+## 27. Agent Function System
 
-### 28.1 概要
+### 27.1 概要
 
 > **実装状況**: ✅ 全て実装済み。AgentFunctionRegistry、全19関数定義・ハンドラ、`call_function()` メソッド（AgentLoop分岐含む）、呼び出し側マイグレーション（tree_ops, experiment_generator, spec_builder）が完了。
 
 SERAのAgentLLMは19箇所のLLM呼び出しで `generate(prompt, purpose) -> str` を使い、各呼び出し側が独自にJSON/コード抽出・パースを行っている。
 
-本セクションでは、全LLM呼び出しを統一的な Agent Function 定義で管理するシステムを構築する。各関数は**出力スキーマ**（何を生成するか）と**ツールアクセス**（どのツールを使えるか）の両方を定義し、`call_function()` が単発生成と AgentLoop（§29）を自動判定する統一エントリポイントとなる。
+本セクションでは、全LLM呼び出しを統一的な Agent Function 定義で管理するシステムを構築する。各関数は**出力スキーマ**（何を生成するか）と**ツールアクセス**（どのツールを使えるか）の両方を定義し、`call_function()` が単発生成と AgentLoop（§28）を自動判定する統一エントリポイントとなる。
 
 > **§5.8 との関係**: 各関数がどのツールを使えるか（`function_tool_bindings`）、ループパラメータ（`function_loop_overrides`）、有効化状態（`tools.enabled`）は **PlanSpec §5.8 `agent_commands`** で Phase 1 に確定・凍結される。本セクションのコード内定義はデフォルト値であり、実行時には §5.8 の値で上書きされる。
 
 ```text
-■ §28 の位置付け
+■ §27 の位置付け
 
   呼び出し側（tree_ops, experiment_generator 等）
        │
@@ -28,14 +28,14 @@ SERAのAgentLLMは19箇所のLLM呼び出しで `generate(prompt, purpose) -> st
        │    → handler(parse) → return
        │
        └─ allowed_tools あり かつ ToolConfig.enabled
-            → §29 AgentLoop（ReAct ループ）
+            → §28 AgentLoop（ReAct ループ）
             → ツール使用 → 観測 → ... → 最終出力
             → handler(parse) → return
 
   ※ handler / return_schema は両パスで共通（最終出力のパース・検証）
 ```
 
-### 28.2 設計方針
+### 27.2 設計方針
 
 1. **スキーマ駆動**: 各LLM呼び出しの入出力をJSON Schemaで定義
 2. **レジストリパターン**: `reward.py` の `_REWARD_METHODS` と同様の登録パターン
@@ -43,7 +43,7 @@ SERAのAgentLLMは19箇所のLLM呼び出しで `generate(prompt, purpose) -> st
 4. **プロバイダ透過**: OpenAI/Anthropic のネイティブtool-calling とローカルのプロンプトベースを自動切り替え
 5. **統一エントリポイント**: `call_function()` が関数定義の `allowed_tools` を参照し、単発生成と AgentLoop を自動分岐。呼び出し側のコード変更は不要
 
-### 28.3 コアデータ構造
+### 27.3 コアデータ構造
 
 ```python
 class OutputMode(Enum):
@@ -63,7 +63,7 @@ class AgentFunction:
     max_retries: int                    # 最大リトライ回数
     handler: Callable | None            # レスポンスパーサ
 
-    # §29 AgentLoop 統合（ToolConfig.enabled=True 時のみ有効）
+    # §28 AgentLoop 統合（ToolConfig.enabled=True 時のみ有効）
     allowed_tools: list[str] | None = None     # None → 単発生成, リスト → AgentLoop
     loop_config: dict[str, Any] | None = None  # AgentLoop 設定 (max_steps, budget 等)
 ```
@@ -71,12 +71,12 @@ class AgentFunction:
 **`allowed_tools` と `loop_config` の意味**:
 
 - `allowed_tools = None`: 従来通り単発 `generate()` で処理。`loop_config` は無視される
-- `allowed_tools = ["tool_a", "tool_b"]` かつ `ToolConfig.enabled=True` かつ `ToolExecutor` が利用可能: §29 の `AgentLoop` 経由で実行。LLM は指定されたツールのみ使用可能
-- `allowed_tools` ありだが `ToolConfig.enabled=False`（デフォルト）: 単発にフォールバック。既存動作に影響なし
+- `allowed_tools = ["tool_a", "tool_b"]` かつ `ToolConfig.enabled=True` かつ `ToolExecutor` が利用可能: §28 の `AgentLoop` 経由で実行。LLM は指定されたツールのみ使用可能
+- `allowed_tools` ありだが `ToolConfig.enabled=False` の場合: 単発にフォールバック。既存動作に影響なし
 
 > **§5.8 連携**: `allowed_tools` のデフォルト値は各関数定義に記載されるが、実行時には PlanSpec §5.8 `agent_commands.functions.function_tool_bindings` の値が優先される。`loop_config` も同様に §5.8 `function_loop_overrides` で上書きされる。これにより Phase 1 でツールアクセスを一元管理できる。
 
-`loop_config` は `AgentLoopConfig`（§29.4.2）のフィールドを辞書で指定:
+`loop_config` は `AgentLoopConfig`（§28.4.2）のフィールドを辞書で指定:
 
 ```python
 loop_config = {
@@ -87,7 +87,7 @@ loop_config = {
 }
 ```
 
-### 28.4 レジストリAPI
+### 27.4 レジストリAPI
 
 ```python
 class AgentFunctionRegistry:
@@ -103,13 +103,13 @@ class AgentFunctionRegistry:
 REGISTRY = AgentFunctionRegistry()  # シングルトン
 ```
 
-### 28.5 登録関数一覧（全19関数）
+### 27.5 登録関数一覧（全19関数）
 
 > **§5.8 参照**: 各関数の有効化リストは PlanSpec §5.8 `agent_commands.functions.available_functions` で定義される。ツールバインディングは §5.8 `function_tool_bindings`、ループ設定は §5.8 `function_loop_overrides` で Phase 1 に凍結される。以下はコード内のデフォルト定義。
 
-#### 28.5.1 AGENT_LOOP 関数（10関数）
+#### 27.5.1 AGENT_LOOP 関数（10関数）
 
-`ToolConfig.enabled=True` 時に AgentLoop で実行される関数。ツールを使った情報収集・検証が品質向上に寄与する。`ToolConfig.enabled=False` 時は単発にフォールバック。
+`ToolConfig.enabled=True`（デフォルト）時に AgentLoop で実行される関数。ツールを使った情報収集・検証が品質向上に寄与する。`ToolConfig.enabled=False` 時は単発にフォールバック。
 
 | 関数名 | Phase | 出力 | allowed_tools | 既存マッピング |
 |--------|-------|------|---------------|--------------|
@@ -139,7 +139,7 @@ REGISTRY = AgentFunctionRegistry()  # シングルトン
 | `aggregate_plot_fix` | 5 | 10 | 120 | 修正→テスト |
 | `paper_clustering` | 3 | 5 | 60 | 検索で分類を補完 |
 
-#### 28.5.2 SINGLE_SHOT 関数（9関数）
+#### 27.5.2 SINGLE_SHOT 関数（9関数）
 
 常に単発 `generate()` で処理される。入力として十分なコンテキストが渡されるため、ツールによる追加情報収集は不要。
 
@@ -155,7 +155,7 @@ REGISTRY = AgentFunctionRegistry()  # シングルトン
 | `paper_review_reflection` | evaluation | FREE_TEXT | `PaperEvaluator` (reflection loop) |
 | `meta_review` | evaluation | FREE_TEXT | `PaperEvaluator._generate_meta_review()` |
 
-### 28.6 `AgentLLM.call_function()` メソッド
+### 27.6 `AgentLLM.call_function()` メソッド
 
 ```python
 async def call_function(
@@ -193,7 +193,7 @@ async def call_function(
    │      )                                              │
    │   c. raw = agent_loop_result.final_output           │
    │   d. self._last_loop_result = agent_loop_result     │
-   │      (§26.5.3 学習統合用に保持)                     │
+   │      (§25.5.3 学習統合用に保持)                     │
    └─────────────────────────────────────────────────────┘
    ┌─────────────────────────────────────────────────────┐
    │ それ以外 → 単発生成（既存パス）                     │
@@ -210,9 +210,9 @@ async def call_function(
 7. リトライ: パース/検証失敗時、max_retries 回まで温度を +0.1 して再試行
 ```
 
-**重要**: `ToolConfig.enabled=False`（デフォルト）の場合、全19関数が単発生成にフォールバックする。呼び出し側（`tree_ops.py` 等）は `call_function()` を呼ぶだけで、AgentLoop の有無を意識しない。
+**重要**: `ToolConfig.enabled=False` の場合、全19関数が単発生成にフォールバックする（デフォルトは `True` — 全関数が AgentLoop 経由で実行される）。呼び出し側（`tree_ops.py` 等）は `call_function()` を呼ぶだけで、AgentLoop の有無を意識しない。
 
-### 28.7 マイグレーション状況
+### 27.7 マイグレーション状況
 
 > **実装状況**: ✅ 全て完了。
 
@@ -230,7 +230,7 @@ async def call_function(
 7. `src/sera/paper/paper_evaluator.py` — `paper_review`, `paper_review_reflection`, `meta_review`
 8. `src/sera/phase0/related_work_engine.py` — `query_generation`, `paper_clustering`
 
-### 28.8 §26, §29 との関係
+### 27.8 §25, §28 との関係
 
 ```text
 全体アーキテクチャ:
@@ -243,7 +243,7 @@ async def call_function(
   └───────────┬────────────┬─────────────────┘
               │            │
               ▼            ▼
-  §28 AgentFunction              §29 Tool Execution Engine
+  §27 AgentFunction              §28 Tool Execution Engine
   ┌─────────────────────┐       ┌──────────────────────────┐
   │ name                │       │ ToolExecutor             │
   │ return_schema       │       │   ├─ 18個のツールハンドラ │
@@ -256,7 +256,7 @@ async def call_function(
            │                       (turns, tool_calls)
            ▼                               │
   最終出力パース                           ▼
-  (handler + validate)          §26 学習統合
+  (handler + validate)          §25 学習統合
                                 ┌──────────────────────────┐
                                 │ PPORolloutV3             │
                                 │ ToolCallRecord           │
@@ -268,11 +268,11 @@ async def call_function(
 | セクション | 役割 | 本セクションとの関係 |
 |-----------|------|-------------------|
 | §5.8 (agent_commands) | ツール・関数の有効化リスト + Phase別マッピング（Phase 1 凍結） | `allowed_tools`/`loop_config` のランタイム値を §5.8 から取得 |
-| §26 (Tool-Using Agent) | 信用割当 + ツール使用経験からの学習 | AgentLoop の軌跡が §26 の学習パイプラインに流入 |
-| §28 (本セクション) | 全 LLM 呼び出しのタスク定義 + 統一エントリポイント | — |
-| §29 (Tool Execution) | ツール実装 + AgentLoop メカニズム + 安全制御 | §28 の `allowed_tools` / `loop_config` に基づき §29 の AgentLoop が起動 |
+| §25 (Tool-Using Agent) | 信用割当 + ツール使用経験からの学習 | AgentLoop の軌跡が §25 の学習パイプラインに流入 |
+| §27 (本セクション) | 全 LLM 呼び出しのタスク定義 + 統一エントリポイント | — |
+| §28 (Tool Execution) | ツール実装 + AgentLoop メカニズム + 安全制御 | §27 の `allowed_tools` / `loop_config` に基づき §28 の AgentLoop が起動 |
 
-### 28.9 新規ファイル一覧
+### 27.9 新規ファイル一覧
 
 | ファイル | 役割 | 状態 |
 |---------|------|------|
@@ -286,7 +286,7 @@ async def call_function(
 | `src/sera/agent/functions/phase0_functions.py` | query_generation, paper_clustering | ✅ 実装済み |
 | `tests/test_agent/test_agent_functions.py` | レジストリ・パース・ハンドラのテスト | ✅ 実装済み |
 
-### 28.10 修正ファイル一覧
+### 27.10 修正ファイル一覧
 
 | ファイル | 変更内容 | 状態 |
 |---------|---------|------|
@@ -297,4 +297,4 @@ async def call_function(
 
 ---
 
-（§28 Agent Function System — TASK.md v13.0）
+（§27 Agent Function System — TASK.md v13.1）

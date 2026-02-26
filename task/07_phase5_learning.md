@@ -1,6 +1,6 @@
 # SERA 要件定義書 — Phase 5: 学習（PPO + LoRA）
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -68,11 +68,42 @@ class PPORollout:
 
 @dataclass
 class PPORolloutV2(PPORollout):
-    """拡張: MT-GRPOターンレベル報酬を含むロールアウト（§26.4.2）"""
+    """拡張: MT-GRPOターンレベル報酬を含むロールアウト（§25.4.2）"""
     turn_rewards: dict[str, float] = field(default_factory=dict)
     # 例: {"phase0": 0.9, "phase3": 1.0, "phase4": 0.6}
     # 注: 要件定義の turn_log_probs は現在の実装に含まれない（将来拡張）
 ```
+
+#### 9.2.1 エージェント実行からのロールアウト生成（Step 7b 接続点）
+
+> **現状（断絶点）**: `PPORollout` / `PPORolloutV2` は定義済みだが、`AgentLoop` の実行結果（`AgentLoopResult`）からロールアウトを生成するパスが存在しない。`AgentLLM._last_loop_result` に結果が保存されるが、`SearchManager` がこれを読み取ってロールアウトに変換するコードは未実装。
+
+`PPORolloutV3`（`src/sera/learning/rollout.py` に定義済み）はツール使用軌跡を含む拡張ロールアウトである：
+
+```python
+@dataclass
+class PPORolloutV3(PPORolloutV2):
+    """拡張: ツール使用軌跡を含むロールアウト（§25.5）"""
+    tool_trajectory: list[ToolCallRecord] = field(default_factory=list)
+```
+
+**接続の流れ（Step 7b で実装）**:
+
+```text
+AgentLoop.run()
+  → AgentLoopResult（turns, tool_results, exit_reason）
+    → SearchManager._build_tool_trajectory()  ← §25.5.3 で詳細定義
+      → list[ToolCallRecord]
+        → PPORolloutV3（prompt, response, log_prob, reward, tool_trajectory）
+          → PPOTrainer.update()
+```
+
+- `SearchManager` は `agent_llm._last_loop_result` から `AgentLoopResult` を取得
+- `_build_tool_trajectory()` で各ターンの `ToolResult` → `ToolCallRecord` 変換
+- `log_prob` は `turn.generation.tool_call_log_probs` から取得（API非対応時は `0.0`）
+- 生成された `PPORolloutV3` は既存の `PPOTrainer.update()` にそのまま渡せる（`PPORollout` のスーパークラス互換）
+
+> **詳細仕様**: グルーコードの具体的な実装仕様は [§25.5.3 Step 7b](./19_tool_using_agent.md) を参照。断絶点の一覧は [§28.11](./22_tool_execution.md) を参照。
 
 **報酬手法の選択（実装済み）**:
 
@@ -83,6 +114,9 @@ class PPORolloutV2(PPORollout):
 | `"outcome_rm"` | `compute_reward_outcome_rm` | 従来の報酬計算（デフォルト） |
 | `"mt_grpo"` | `compute_reward_mt_grpo` | ターンレベル報酬の重み付き和 |
 | `"hiper"` | `compute_reward_hiper` | HiPER（報酬値は `mt_grpo` に委譲） |
+| `"tool_aware"` | `compute_reward_tool_aware` | ツール効率ボーナス/ペナルティ付き報酬（§25.5） |
+
+> **実装状況**: `compute_reward_tool_aware` は登録済み。`PPOTrainer._compute_advantages_for_method()` に `tool_aware` ルーティングが実装され、`PPORolloutV3.tool_trajectory` からの `ToolCallRecord` データをパースして報酬計算に反映する。Step 7b のグルーコード（SearchManager → PPOバッファ接続）は未着手。
 
 ```python
 # ディスパッチャ（実装済み: src/sera/learning/reward.py）
@@ -202,6 +236,8 @@ class HierarchicalAdvantageEstimator:
         """各ロールアウトの advantage と returns を設定。"""
         ...
 ```
+
+> **断絶点（Switch Level）**: HiPER の Switch Level は `turn_rewards` の分散を基にAdvantageを計算するが、ツール品質（`ToolCallRecord` の成功率・実行時間）は現在反映されない。Step 7d（§25.5 Phase C）で `PPORolloutV3.tool_trajectory` から Switch Level にツール品質シグナルを注入する予定。
 
 ### 9.4 差分継承（delta inheritance：必須）
 - 子のLoRA = 親のLoRA + Δ

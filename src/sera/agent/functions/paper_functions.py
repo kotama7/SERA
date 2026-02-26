@@ -124,6 +124,8 @@ def handle_paper_reflection(response: str) -> str:
     phase="paper",
     default_temperature=0.5,
     max_retries=3,
+    allowed_tools=["execute_code_snippet"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_aggregate_plot_generation(response: str) -> list[dict]:
     """Parse plot generation specs from LLM response."""
@@ -156,6 +158,8 @@ def handle_aggregate_plot_generation(response: str) -> list[dict]:
     phase="paper",
     default_temperature=0.5,
     max_retries=3,
+    allowed_tools=["execute_code_snippet"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_aggregate_plot_fix(response: str) -> str:
     """Extract fixed plotting code."""
@@ -182,6 +186,8 @@ def handle_aggregate_plot_fix(response: str) -> str:
     phase="paper",
     default_temperature=0.5,
     max_retries=2,
+    allowed_tools=["semantic_scholar_search", "web_search"],
+    loop_config={"max_steps": 8, "tool_call_budget": 15, "timeout_sec": 180},
 )
 def handle_citation_identify(response: str) -> str:
     """Return citation identification text."""
@@ -209,6 +215,8 @@ def handle_citation_identify(response: str) -> str:
     phase="paper",
     default_temperature=0.3,
     max_retries=2,
+    allowed_tools=["semantic_scholar_search"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_citation_select(response: str) -> str:
     """Return selection text."""

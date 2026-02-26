@@ -62,7 +62,11 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
 
     model_spec = ModelSpecModel(**builder.build_model_spec(cli_args_with_workdir))
     resource_spec = ResourceSpecModel(**builder.build_resource_spec(cli_args_with_workdir))
-    exec_spec = ExecutionSpecModel(**builder.build_execution_spec(cli_args_with_workdir))
+    exec_data = builder.build_execution_spec(cli_args_with_workdir)
+    # Apply wizard learning_enabled flag
+    if "learning_enabled" in cli_args:
+        exec_data["learning"]["enabled"] = cli_args["learning_enabled"]
+    exec_spec = ExecutionSpecModel(**exec_data)
 
     # Build ProblemSpec and PlanSpec
     from sera.specs.problem_spec import ProblemSpecModel
@@ -71,6 +75,31 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
     # Load existing problem_spec if present (e.g. manually created)
     problem_spec = load_spec("problem_spec.yaml", ProblemSpecModel, "problem_spec")
     plan_spec = load_spec("plan_spec.yaml", PlanSpecModel, "plan_spec")
+
+    # Apply wizard reward_method and echo_enabled flags to plan_spec
+    if "reward_method" in cli_args:
+        plan_spec.reward.primary_source = cli_args["reward_method"]
+    if "echo_enabled" in cli_args:
+        plan_spec.echo.enabled = cli_args["echo_enabled"]
+
+    # Apply CLI turn reward flags to plan_spec
+    if cli_args.get("no_turn_rewards", False):
+        plan_spec.turn_rewards.enabled = False
+    else:
+        # Apply CLI weight overrides to plan_spec.turn_rewards.phase_rewards
+        from sera.specs.plan_spec import PhaseRewardConfig
+
+        weight_map = {
+            "turn_w_phase0": "phase0",
+            "turn_w_phase2": "phase2",
+            "turn_w_phase3": "phase3",
+            "turn_w_phase4": "phase4",
+            "turn_w_phase7": "phase7",
+        }
+        for cli_key, phase_key in weight_map.items():
+            if cli_key in cli_args:
+                if phase_key in plan_spec.turn_rewards.phase_rewards:
+                    plan_spec.turn_rewards.phase_rewards[phase_key].weight = cli_args[cli_key]
 
     # If problem_spec is default (no manipulated_variables), try to build via LLM
     if auto and not problem_spec.manipulated_variables:

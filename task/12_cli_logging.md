@@ -1,6 +1,6 @@
 # SERA 要件定義書 — CLI・ログ仕様
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -33,18 +33,20 @@ sera status                          # 現在の探索状態サマリ表示
 sera show-node <node_id>             # ノード詳細表示
 sera replay --node-id <id> --seed <s>  # 特定ノードの実験再実行
 sera validate-specs                  # Spec整合性チェック
+sera visualize                       # 探索木HTML可視化（§29参照）
+sera visualize --live --port 8080    # ライブモード（auto-refresh）
 ```
 
 ### 16.3 引数（全コマンド共通）
 ```bash
-# Phase 0 関連
+# Phase 0 関連（phase0-related-work コマンドのみ）
 --topk 20                  # top_k_papers
 --teacher-papers 8         # teacher_papers
 --citation-depth 2         # citation_graph_depth
 --years-bias 3             # recent_years_bias
 --api-priority "semantic_scholar,crossref,arxiv"
 
-# Phase 2 関連
+# Phase 2 関連（freeze-specs コマンド）
 --max-nodes 200
 --max-depth 12
 --branch-factor 5
@@ -128,7 +130,7 @@ sera validate-specs                  # Spec整合性チェック
   "mu": 0.71,
   "se": 0.015,
   "lcb": 0.681,
-  "ucb": 0.739,
+  "ucb": 0.739,          // ✅ 実装済み: evaluate_one / evaluate_full 両方でログに記録
   "n_repeats_done": 3,
   "cost_sec": 125.3,
   "timestamp": "2026-02-21T12:05:00Z"

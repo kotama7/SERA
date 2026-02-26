@@ -40,10 +40,6 @@ def phase0_related_work(
 def freeze_specs(
     work_dir: str = "./sera_workspace",
     auto: bool = False,
-    topk: int = 10,
-    teacher_papers: int = 5,
-    citation_depth: int = 1,
-    years_bias: int = 5,
     max_nodes: int = 100,
     max_depth: int = 10,
     branch_factor: int = 3,
@@ -75,11 +71,11 @@ def freeze_specs(
     no_snapshot_topk: bool = False,
     api_priority: str = "semantic_scholar,crossref,arxiv,web",
     no_turn_rewards: bool = False,
-    turn_w_phase0: float = 0.15,
-    turn_w_phase2: float = 0.25,
-    turn_w_phase3: float = 0.20,
-    turn_w_phase5: float = 0.20,
-    turn_w_phase7: float = 0.20,
+    turn_w_phase0: float = 0.10,
+    turn_w_phase2: float = 0.15,
+    turn_w_phase3: float = 0.25,
+    turn_w_phase4: float = 0.35,
+    turn_w_phase7: float = 0.15,
 ):
     """Phase 1: 全Spec確定、ExecutionSpec固定"""
     from sera.commands.phase1_cmd import run_freeze_specs
@@ -179,11 +175,13 @@ def visualize(
     work_dir: str = "./sera_workspace",
     step: int | None = None,
     output: str | None = None,
+    live: bool = False,
+    port: int = 8080,
 ):
     """探索木の可視化HTML生成"""
     from sera.commands.visualize_cmd import run_visualize
 
-    run_visualize(work_dir, step=step, output=output)
+    run_visualize(work_dir, step=step, output=output, live=live, port=port)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,14 @@
 Generates a self-contained HTML file with inline CSS and JavaScript.
 Uses D3.js (CDN with inline fallback note) for interactive tree visualization.
 No Jinja2 dependency -- pure f-string / string.Template.
+
+D3.js loading strategy (offline-aware for SLURM compute nodes):
+  1. First tries to load D3.js from CDN (fast, browser-cached).
+  2. If CDN is unreachable (e.g. SLURM compute node without internet),
+     a warning message is displayed and a minimal d3 stub is injected
+     to prevent JavaScript errors from breaking the page.
+  3. For full offline functionality, users can place ``d3.v7.min.js``
+     in the same directory as the generated HTML file.
 """
 
 from __future__ import annotations
@@ -167,7 +175,25 @@ main { display: flex; height: calc(100vh - 200px); min-height: 400px; }
     </div>
 </div>
 
+<!-- D3.js: CDN with offline fallback for SLURM compute nodes without network access.
+     If the CDN fails, a warning message is shown and a minimal d3 stub is injected
+     to prevent JavaScript errors. Users can place d3.v7.min.js in the same directory
+     as this HTML file for full offline functionality. -->
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+if (typeof d3 === 'undefined') {
+    document.write('<p style="color:#e94560;padding:20px;">D3.js failed to load from CDN. For offline use, place d3.v7.min.js in the same directory as this HTML file.</p>');
+    // Provide a minimal d3 stub to prevent JS errors
+    window.d3 = {
+        select: () => ({ append: () => d3.select(), attr: () => d3.select(), style: () => d3.select(), html: () => d3.select(), selectAll: () => d3.select(), data: () => d3.select(), enter: () => d3.select(), on: () => d3.select(), each: () => d3.select(), call: () => d3.select(), text: () => d3.select() }),
+        hierarchy: (d) => ({ descendants: () => [], links: () => [], x: 0, y: 0 }),
+        tree: () => ({ size: () => d3.tree(), separation: () => d3.tree() }),
+        zoom: () => ({ scaleExtent: () => d3.zoom(), on: () => d3.zoom() }),
+        zoomIdentity: { translate: () => ({ scale: () => ({}) }) },
+        linkHorizontal: () => ({ x: () => d3.linkHorizontal(), y: () => d3.linkHorizontal() }),
+    };
+}
+</script>
 <script>
 // =========================================================================
 // Data (injected by Python)
@@ -459,17 +485,31 @@ document.getElementById('code-modal').addEventListener('click', function(e) {
     }
     html += '</div></div>';
 
-    // Operator distribution
-    html += '<div class="stat-card chart-container"><h3>Operator Distribution</h3><div class="bar-chart">';
-    const maxOp = Math.max(...Object.values(s.operator_counts || {}), 1);
+    // Operator distribution (pie chart)
+    html += '<div class="stat-card chart-container"><h3>Operator Distribution</h3>';
     const opColors = { draft: '#666', debug: '#E57373', improve: '#64B5F6' };
-    for (const [op, count] of Object.entries(s.operator_counts || {})) {
-        const h = Math.max(4, (count / maxOp) * 70);
-        html += `<div class="bar">
-            <div class="bar-value">${count}</div>
-            <div class="bar-fill" style="height:${h}px;background:${opColors[op]||'#888'};"></div>
-            <div class="bar-label">${op}</div>
-        </div>`;
+    const opEntries = Object.entries(s.operator_counts || {});
+    const opTotal = opEntries.reduce((sum, [, c]) => sum + c, 0) || 1;
+    html += '<svg viewBox="0 0 120 120" width="100" height="100" style="display:block;margin:0 auto">';
+    let cumAngle = 0;
+    for (const [op, count] of opEntries) {
+        const frac = count / opTotal;
+        const angle = frac * 2 * Math.PI;
+        const x1 = 60 + 50 * Math.cos(cumAngle);
+        const y1 = 60 + 50 * Math.sin(cumAngle);
+        const x2 = 60 + 50 * Math.cos(cumAngle + angle);
+        const y2 = 60 + 50 * Math.sin(cumAngle + angle);
+        const large = angle > Math.PI ? 1 : 0;
+        if (frac >= 1) {
+            html += `<circle cx="60" cy="60" r="50" fill="${opColors[op]||'#888'}"/>`;
+        } else {
+            html += `<path d="M60,60 L${x1},${y1} A50,50 0 ${large},1 ${x2},${y2} Z" fill="${opColors[op]||'#888'}"/>`;
+        }
+        cumAngle += angle;
+    }
+    html += '</svg><div style="text-align:center;margin-top:4px">';
+    for (const [op, count] of opEntries) {
+        html += `<span style="color:${opColors[op]||'#888'};margin:0 6px;font-size:11px">\u25CF ${op}: ${count}</span>`;
     }
     html += '</div></div>';
 

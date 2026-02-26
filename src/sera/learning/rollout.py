@@ -48,3 +48,9 @@ class PPORolloutV3(PPORolloutV2):
     """
 
     tool_trajectory: list = field(default_factory=list)
+    tool_log_prob_sum: float = 0.0
+    text_log_prob_sum: float = 0.0
+    total_tool_calls: int = 0
+    tool_success_rate: float = 1.0
+    agent_loop_steps: int = 0
+    agent_loop_exit_reason: str = ""

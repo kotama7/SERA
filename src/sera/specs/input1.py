@@ -52,6 +52,7 @@ class GoalConfig(BaseModel):
     """The optimisation objective."""
 
     objective: str = Field(..., description="What to optimise, e.g. 'BLEU score on test set'")
+    metric: str = Field("", description="Primary metric name, e.g. 'accuracy', 'BLEU'")
     direction: Literal["minimize", "maximize"] = Field(..., description="Whether lower or higher is better")
     baseline: str = Field("", description="Optional baseline value or method name")
 

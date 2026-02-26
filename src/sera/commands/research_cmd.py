@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -58,7 +59,8 @@ def run_research(
 
             current_hash = compute_adapter_spec_hash(specs.model.adapter_spec.model_dump())
             if current_hash != stored_hash:
-                console.print("[yellow]Adapter spec hash mismatch (hash algorithm may have changed). Continuing.[/yellow]")
+                console.print("[red]Adapter spec hash mismatch! LoRA compatibility cannot be guaranteed.[/red]")
+                sys.exit(3)
 
     # Initialize components
     from sera.agent.agent_llm import AgentLLM
@@ -163,6 +165,25 @@ def run_research(
                 else 2000,
             )
 
+            # Wire MCP servers from ResourceSpec into ToolExecutor
+            mcp_cfg = getattr(specs.resource, "mcp", None)
+            if mcp_cfg and getattr(mcp_cfg, "servers", None):
+                try:
+                    from sera.agent.mcp_client import MCPToolProvider, MCPConfig as MCPClientConfig
+
+                    for srv in mcp_cfg.servers:
+                        auth_token = os.environ.get(srv.auth_token_env) if srv.auth_token_env else None
+                        mcp_provider = MCPToolProvider(MCPClientConfig(
+                            server_url=srv.url,
+                            auth_token=auth_token,
+                            name=srv.name,
+                            allowed_tools=srv.tools if srv.tools else None,
+                        ))
+                        tool_executor.add_mcp_provider(mcp_provider)
+                    console.print(f"[cyan]MCP: {len(mcp_cfg.servers)} server(s) registered[/cyan]")
+                except Exception as e:
+                    console.print(f"[yellow]MCP initialization failed: {e}[/yellow]")
+
             agent_loop = AgentLoop(
                 agent_llm=agent_llm,
                 tool_executor=tool_executor,
@@ -214,7 +235,7 @@ def run_research(
 
     if reward_method in ("mt_grpo", "hiper"):
         turn_reward_spec = getattr(plan_spec, "turn_rewards", None)
-        if turn_reward_spec is not None:
+        if turn_reward_spec is not None and getattr(turn_reward_spec, "enabled", True):
             from sera.learning.turn_reward import TurnRewardEvaluator
 
             turn_reward_evaluator = TurnRewardEvaluator(turn_reward_spec, log_path=log_dir / "turn_reward_log.jsonl")

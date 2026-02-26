@@ -163,6 +163,8 @@ class SlurmExecutor(Executor):
         # Set up run directory
         run_dir = self.work_dir / "runs" / node_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = run_dir / "artifacts"
+        artifacts_dir.mkdir(exist_ok=True)
 
         stdout_path = run_dir / "stdout.log"
         stderr_path = run_dir / "stderr.log"
@@ -241,7 +243,7 @@ class SlurmExecutor(Executor):
             interpreter,
             script_abs,
             seed,
-            str(run_dir),
+            str(artifacts_dir),
             self.slurm_config.modules,
             seed_fmt,
         )
@@ -347,6 +349,8 @@ class SlurmExecutor(Executor):
         # Set up run directory
         run_dir = self.work_dir / "runs" / node_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = run_dir / "artifacts"
+        artifacts_dir.mkdir(exist_ok=True)
 
         stdout_path = run_dir / "stdout.log"
         stderr_path = run_dir / "stderr.log"
@@ -423,7 +427,7 @@ class SlurmExecutor(Executor):
             interpreter,
             script_abs,
             seed,
-            str(run_dir),
+            str(artifacts_dir),
             self.slurm_config.modules,
             seed_fmt,
         )
@@ -597,7 +601,7 @@ class SlurmExecutor(Executor):
 
         # Phase A: Submit all jobs
         logger.info("Batch Phase A: submitting %d SLURM jobs", len(tasks))
-        handles: list[dict] = []
+        handles: list[SlurmJobHandle] = []
         for task in tasks:
             handle = await self.submit_async(
                 node_id=task["node_id"],
@@ -609,7 +613,7 @@ class SlurmExecutor(Executor):
         logger.info(
             "Batch Phase A complete: %d jobs submitted (job IDs: %s)",
             len(handles),
-            ", ".join(str(h["job"].job_id) for h in handles),
+            ", ".join(h.job_id for h in handles),
         )
 
         # Phase B: Poll all jobs until all are finished (async sleep between polls)
@@ -622,9 +626,8 @@ class SlurmExecutor(Executor):
             still_pending = set()
             for idx in pending_indices:
                 h = handles[idx]
-                job = h["job"]
                 try:
-                    state = job.state
+                    state = h.job.state
                 except Exception:
                     # If state query fails, keep polling
                     still_pending.add(idx)
@@ -633,25 +636,24 @@ class SlurmExecutor(Executor):
                 if state in ("COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"):
                     logger.info(
                         "SLURM job %s (node %s) reached terminal state: %s",
-                        job.job_id,
-                        h["node_id"][:8],
+                        h.job_id,
+                        h.node_id[:8],
                         state,
                     )
                 else:
                     still_pending.add(idx)
 
                 # Also check Python-side timeout
-                timeout_sec = h.get("timeout_sec")
-                if timeout_sec is not None:
-                    elapsed = time.monotonic() - h["start_time"]
-                    if elapsed >= timeout_sec and idx in still_pending:
+                if h.timeout_sec is not None:
+                    elapsed = time.monotonic() - h.start_time
+                    if elapsed >= h.timeout_sec and idx in still_pending:
                         logger.warning(
                             "SLURM job %s (node %s) exceeded Python timeout %.0fs, cancelling",
-                            job.job_id,
-                            h["node_id"][:8],
-                            timeout_sec,
+                            h.job_id,
+                            h.node_id[:8],
+                            h.timeout_sec,
                         )
-                        self._cancel_job(job)
+                        self._cancel_job(h.job)
                         still_pending.discard(idx)
 
             pending_indices = still_pending
@@ -664,18 +666,18 @@ class SlurmExecutor(Executor):
         # Phase C: Collect all results in parallel
         logger.info("Batch Phase C: collecting results from %d jobs", len(handles))
 
-        async def _collect_one(handle: dict) -> RunResult:
+        async def _collect_one(handle: SlurmJobHandle) -> RunResult:
             return await self.collect_result(
-                node_id=handle["node_id"],
-                job=handle["job"],
-                start_time=handle["start_time"],
-                timeout_sec=handle.get("timeout_sec"),
-                run_dir=handle["run_dir"],
-                slurm_log_dir=handle["slurm_log_dir"],
-                stdout_path=handle["stdout_path"],
-                stderr_path=handle["stderr_path"],
-                metrics_path=handle["metrics_path"],
-                seed=handle["seed"],
+                node_id=handle.node_id,
+                job=handle.job,
+                start_time=handle.start_time,
+                timeout_sec=handle.timeout_sec,
+                run_dir=handle.run_dir,
+                slurm_log_dir=handle.slurm_log_dir,
+                stdout_path=handle.stdout_path,
+                stderr_path=handle.stderr_path,
+                metrics_path=handle.metrics_path,
+                seed=handle.seed,
             )
 
         results = await asyncio.gather(*[_collect_one(h) for h in handles])

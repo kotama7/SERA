@@ -6,6 +6,7 @@ from sera.execution.slurm_executor import SlurmExecutor
 from sera.execution.docker_executor import DockerExecutor
 from sera.execution.experiment_generator import ExperimentGenerator
 from sera.execution.ablation import AblationRunner, AblationResult
+from sera.execution.streaming import StreamEvent, StreamEventType, StreamIterator
 
 __all__ = [
     "Executor",
@@ -16,4 +17,7 @@ __all__ = [
     "ExperimentGenerator",
     "AblationRunner",
     "AblationResult",
+    "StreamEvent",
+    "StreamEventType",
+    "StreamIterator",
 ]

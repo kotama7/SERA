@@ -1,6 +1,6 @@
 # TASK.md
 # Self-Evolving Research Agent（SERA）
-# 完全最終要件定義書 v13.0
+# 完全最終要件定義書 v13.1
 
 > **本ファイルは分割されました。** 各セクションの詳細は [`task/`](./task/) ディレクトリ以下を参照してください。
 
@@ -31,10 +31,10 @@
 | [task/14_module_structure.md](./task/14_module_structure.md) | §21: モジュール構成 |
 | [task/15_appendix.md](./task/15_appendix.md) | 付録A–C: 先行研究・禁止事項・AgentLLM |
 | [task/16_implementation_guide.md](./task/16_implementation_guide.md) | §22: 実装手順書 |
-| [task/17_multilang.md](./task/17_multilang.md) | §23: 多言語実験サポート |
-| [task/18_slurm.md](./task/18_slurm.md) | §24: SLURM実行パイプライン |
-| [task/19_agent_model.md](./task/19_agent_model.md) | §25: Agentモデル拡張 |
-| [task/20_tool_using_agent.md](./task/20_tool_using_agent.md) | §26: Tool-Using Agent拡張（HiPER + ECHO） |
-| [task/21_setup_wizard.md](./task/21_setup_wizard.md) | §27: 対話型セットアップウィザード |
-| [task/22_agent_functions.md](./task/22_agent_functions.md) | §28: Agent Function System（タスク定義 + 統一エントリポイント） |
-| [task/23_tool_execution.md](./task/23_tool_execution.md) | §29: Tool Execution Engine（ツール実行基盤 + AgentLoop） |
+| [task/17_slurm.md](./task/17_slurm.md) | §23: SLURM実行パイプライン |
+| [task/18_agent_model.md](./task/18_agent_model.md) | §24: Agentモデル拡張 |
+| [task/19_tool_using_agent.md](./task/19_tool_using_agent.md) | §25: Tool-Using Agent拡張（HiPER + ECHO） |
+| [task/20_setup_wizard.md](./task/20_setup_wizard.md) | §26: 対話型セットアップウィザード |
+| [task/21_agent_functions.md](./task/21_agent_functions.md) | §27: Agent Function System（タスク定義 + 統一エントリポイント） |
+| [task/22_tool_execution.md](./task/22_tool_execution.md) | §28: Tool Execution Engine（ツール実行基盤 + AgentLoop） |
+| [task/23_visualization.md](./task/23_visualization.md) | §29: 探索木可視化ツール |

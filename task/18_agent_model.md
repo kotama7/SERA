@@ -1,12 +1,12 @@
 # SERA 要件定義書 — Agentモデル拡張
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
-## 25. Agentモデル拡張（Multi-Agent Model Support）
+## 24. Agentモデル拡張（Multi-Agent Model Support）
 
-### 25.1 現状と課題
+### 24.1 現状と課題
 
 現行SERAは **Qwen2.5-Coder-7B-Instruct** を唯一のベースモデルとして使用している。選定理由は以下の通り：
 
@@ -24,7 +24,7 @@
 2. **汎化性の未検証**: 他モデルでの動作保証がない（LoRA rank/alpha、プロンプト形式、トークナイザ等の差異）
 3. **ベンチマーク比較不能**: SERA自体の貢献とモデル選択の効果が分離できない
 
-### 25.2 対応候補モデル
+### 24.2 対応候補モデル
 
 | モデル | パラメータ数 | 特徴 | vLLM対応 | LoRA+PPO | Tool-Calling互換性 | 備考 |
 |--------|------------|------|---------|----------|-------------------|------|
@@ -34,9 +34,9 @@
 | CodeLlama-7B | 7B | Meta製コード特化 | ○ | ○ | △（構造化出力で代替可） | Llama系との比較用 |
 | Llama-3.1-8B-Instruct | 8B | 汎用 | ○ | ○ | ○（ネイティブtool-calling対応） | 非コード特化モデルの対照群 |
 
-### 25.3 実装要件
+### 24.3 実装要件
 
-#### 25.3.1 ModelSpec の拡張
+#### 24.3.1 ModelSpec の拡張
 
 ```yaml
 # model_spec.yaml - 拡張版
@@ -64,7 +64,7 @@ model_families:
     tokenizer_kwargs: {}
 ```
 
-#### 25.3.2 AgentLLM のモデル抽象化
+#### 24.3.2 AgentLLM のモデル抽象化
 
 ```python
 class AgentLLM:
@@ -83,7 +83,7 @@ class AgentLLM:
         return formatter.format(prompt, purpose)
 ```
 
-#### 25.3.3 LoRA互換性の保証
+#### 24.3.3 LoRA互換性の保証
 
 ```python
 def validate_lora_compatibility(model_config: dict, lora_config: dict) -> bool:
@@ -100,7 +100,7 @@ def validate_lora_compatibility(model_config: dict, lora_config: dict) -> bool:
 
 > **重要**: `adapter_spec_hash`（§10.1）はモデルアーキテクチャの情報を含むため、異なるモデルファミリ間でのdelta継承は**不可能**である。モデル比較実験は独立した探索木として実行する。
 
-### 25.4 アブレーション計画（A7: ベースモデル比較）
+### 24.4 アブレーション計画（A7: ベースモデル比較）
 
 | 実験ID | モデル | 評価タスク | 測定指標 |
 |--------|--------|----------|---------|

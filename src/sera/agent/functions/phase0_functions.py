@@ -32,6 +32,8 @@ from sera.agent.agent_functions import (
     phase="phase0",
     default_temperature=0.7,
     max_retries=2,
+    allowed_tools=["semantic_scholar_search", "arxiv_search"],
+    loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_query_generation(response: str) -> str:
     """Return generated queries as text."""
@@ -69,6 +71,8 @@ def handle_query_generation(response: str) -> str:
     phase="phase0",
     default_temperature=0.5,
     max_retries=3,
+    allowed_tools=["semantic_scholar_search"],
+    loop_config={"max_steps": 3, "tool_call_budget": 5, "timeout_sec": 60},
 )
 def handle_paper_clustering(response: str) -> list[dict]:
     """Parse paper clusters from LLM response."""

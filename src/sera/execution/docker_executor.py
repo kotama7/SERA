@@ -127,6 +127,8 @@ class DockerExecutor(Executor):
         # Set up run directory
         run_dir = self.work_dir / "runs" / node_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = run_dir / "artifacts"
+        artifacts_dir.mkdir(exist_ok=True)
 
         stdout_path = run_dir / "stdout.log"
         stderr_path = run_dir / "stderr.log"

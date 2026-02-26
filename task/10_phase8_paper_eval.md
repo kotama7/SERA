@@ -1,6 +1,6 @@
 # SERA 要件定義書 — Phase 8: 論文評価・改善
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -184,7 +184,7 @@ def run_evaluate_paper(work_dir: str) -> None:
            {paper_md}"
        c. LLM の応答で paper_md を更新
        d. 修正版を paper/paper.md に上書き保存
-    5. paper_revision_limit（specs.execution.paper.paper_revision_limit）回まで繰り返し
+    5. `paper_revision_limit`（`specs.execution.paper.paper_revision_limit`）回まで繰り返し
     6. 最終スコアをコンソールに出力
 
     注意:

@@ -1,6 +1,6 @@
 # SERA 要件定義書 — 実装手順書
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -817,13 +817,13 @@ lineage/
 ```python
 # rollout.py — PPORolloutV2 の追加
 class PPORolloutV2(PPORollout):
-    """§26.4.2: ターンレベル報酬を含む拡張ロールアウト"""
+    """§25.4.2: ターンレベル報酬を含む拡張ロールアウト"""
     turn_rewards: dict[str, float]    # {"phase2": 0.8, "phase3": 1.0, ...}
     turn_log_probs: dict[str, float]  # Phase毎のlog_prob
 
 # reward.py — compute_reward_v2 の追加
 def compute_reward_v2(node, turn_rewards, plan_spec) -> float:
-    """§26.4.2: R = Σ_t(w_t * r_turn_t) - penalties"""
+    """§25.4.2: R = Σ_t(w_t * r_turn_t) - penalties"""
     # TurnRewardSpec は PlanSpec.turn_rewards に格納
     # plan_spec.turn_rewards.enabled == False の場合は compute_reward にフォールバック
 ```
@@ -1180,7 +1180,7 @@ class FailureSummary:
     avoidance_advice: str     # 兄弟ノードが避けるべき事項
 
 class FailureKnowledgeExtractor:
-    """ECHO軽量版: 失敗ノードから知識を抽出し兄弟ノードに注入（§26.4.3）"""
+    """ECHO軽量版: 失敗ノードから知識を抽出し兄弟ノードに注入（§25.4.3）"""
 
     def __init__(self, agent_llm: "AgentLLM"):
         self.agent_llm = agent_llm
@@ -1261,7 +1261,7 @@ def build_context(self, parent: SearchNode, siblings: list[SearchNode]) -> str:
 
 ### 22.17 Step 15: Phase C — HiPER + Tool-Calling
 
-> **実装状況**: ✅ HiPER 3層Advantage分解、Agent Function System（§28）、Tool Execution Engine（§29）は全て実装済み。以下のコード例は初期設計時のもの。実際の実装は `src/sera/agent/` 以下（`agent_functions.py`, `agent_loop.py`, `tool_executor.py`, `tool_policy.py`, `tools/`, `functions/`）を参照。ツール・関数の有効化リストは PlanSpec §5.8 `agent_commands` で Phase 1 に凍結される。
+> **実装状況**: ✅ HiPER 3層Advantage分解、Agent Function System（§27）、Tool Execution Engine（§28）は全て実装済み。以下のコード例は初期設計時のもの。実際の実装は `src/sera/agent/` 以下（`agent_functions.py`, `agent_loop.py`, `tool_executor.py`, `tool_policy.py`, `tools/`, `functions/`）を参照。ツール・関数の有効化リストは PlanSpec §5.8 `agent_commands` で Phase 1 に凍結される。
 
 **作業内容**: AgentLLMのtool-calling対応と階層的PPOを実装する。
 
@@ -1326,7 +1326,7 @@ class ToolRegistry:
 ```python
 class HierarchicalPPOTrainer:
     """
-    HiPER（§26.5）の3層階層的PPO。
+    HiPER（§25.5）の3層階層的PPO。
     - Switch Level: ノード選択方策のアドバンテージ推定
     - High Level: Phase戦略のアドバンテージ推定
     - Low Level: テキスト/ツール出力のアドバンテージ推定
@@ -1538,9 +1538,9 @@ def pytest_configure(config):
 [ ] 失敗なしの場合に既存動作に影響しない
 
 === Phase C: HiPER + Tool-Calling（Step 15） ===
-[x] ToolExecutor が18ツールのディスパッチ・ToolPolicy・レート制限を管理する（§29）
-[x] AgentFunctionRegistry が19関数を登録し call_function() で統一呼び出し（§28）
-[x] AgentLoop が ReAct 型反復ループで allowed_tools を制限しツール実行（§29）
+[x] ToolExecutor が18ツールのディスパッチ・ToolPolicy・レート制限を管理する（§28）
+[x] AgentFunctionRegistry が19関数を登録し call_function() で統一呼び出し（§27）
+[x] AgentLoop が ReAct 型反復ループで allowed_tools を制限しツール実行（§28）
 [x] AgentLLM.generate_with_tools() が全3プロバイダ（local/openai/anthropic）で動作する
 [x] HierarchicalPPOTrainer の基本フレームワークが実装済み
 [x] PlanSpec §5.8 agent_commands でツール・関数の有効化リストが Phase 1 で凍結される

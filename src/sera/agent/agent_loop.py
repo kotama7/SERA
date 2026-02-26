@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
@@ -53,6 +54,7 @@ class AgentLoopConfig:
     observation_max_tokens: int = 2000
     timeout_sec: float = 300.0
     allowed_tools: list[str] | None = None
+    on_tool_output: Callable[[ToolResult], None] | None = None
 
 
 class AgentLoop:
@@ -176,6 +178,11 @@ class AgentLoop:
                     result = await self.tool_executor.execute(tc)
                     tool_results.append(result)
                     tool_call_count += 1
+                    if self.config.on_tool_output is not None:
+                        try:
+                            self.config.on_tool_output(result)
+                        except Exception:
+                            logger.debug("on_tool_output callback error", exc_info=True)
 
                 step_wall = time.monotonic() - step_start
                 turn = AgentTurn(

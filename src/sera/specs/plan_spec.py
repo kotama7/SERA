@@ -54,8 +54,8 @@ class RewardConfig(BaseModel):
     """Reward / scoring configuration for tree search."""
 
     method: Literal["outcome_rm", "mt_grpo", "tool_aware", "hiper"] = Field(
-        "outcome_rm",
-        description="Reward method: outcome_rm (default), mt_grpo (turn-level), tool_aware (tool efficiency), hiper (hierarchical)",
+        "hiper",
+        description="Reward method: hiper (default, hierarchical), outcome_rm, mt_grpo (turn-level), tool_aware (tool efficiency)",
     )
     formula: str = Field(
         "primary - penalty(constraints) - lambda_cost * cost",
@@ -94,9 +94,17 @@ class TurnRewardSpec(BaseModel):
 class EchoConfig(BaseModel):
     """ECHO lightweight: failure knowledge extraction and injection."""
 
-    enabled: bool = Field(False, description="Enable ECHO failure knowledge extraction")
+    enabled: bool = Field(True, description="Enable ECHO failure knowledge extraction")
     max_summaries_per_node: int = Field(3, description="Max failure summaries injected per node")
     summary_max_tokens: int = Field(256, description="Max tokens per failure summary")
+
+
+class ToolRewardConfig(BaseModel):
+    """Tool usage reward configuration."""
+
+    enabled: bool = Field(False, description="Enable tool usage reward adjustments")
+    efficiency_coef: float = Field(0.01, description="Coefficient for tool efficiency bonus")
+    failure_penalty_coef: float = Field(0.05, description="Coefficient for tool failure penalty")
 
 
 class HiperConfig(BaseModel):
@@ -106,6 +114,8 @@ class HiperConfig(BaseModel):
     high_level_weight: float = Field(0.4, description="Weight for high-level advantage")
     low_level_weight: float = Field(0.3, description="Weight for low-level advantage")
     bootstrap_at_boundaries: bool = Field(True, description="Bootstrap value at phase boundaries")
+    tool_quality_weight: float = Field(0.1, description="Weight for tool quality in switch-level advantage")
+    tool_efficiency_weight: float = Field(0.1, description="Weight for tool efficiency in switch-level advantage")
 
 
 class LoggingConfig(BaseModel):
@@ -331,9 +341,10 @@ class PlanSpecModel(BaseModel):
     reward: RewardConfig = Field(default_factory=RewardConfig, description="Reward configuration")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Logging settings")
     artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig, description="Artefact storage settings")
-    turn_rewards: TurnRewardSpec | None = Field(None, description="MT-GRPO/HiPER turn-level reward spec")
+    turn_rewards: TurnRewardSpec = Field(default_factory=TurnRewardSpec, description="MT-GRPO/HiPER turn-level reward spec")
     echo: EchoConfig = Field(default_factory=EchoConfig, description="ECHO failure knowledge config")
-    hiper: HiperConfig | None = Field(None, description="HiPER hierarchical advantage config")
+    hiper: HiperConfig = Field(default_factory=HiperConfig, description="HiPER hierarchical advantage config")
+    tool_reward: ToolRewardConfig = Field(default_factory=ToolRewardConfig, description="Tool usage reward config")
     tools: ToolConfig = Field(default_factory=ToolConfig, description="Tool execution engine config (flat/compat)")
     agent_commands: AgentCommandsConfig = Field(
         default_factory=AgentCommandsConfig,

@@ -1,6 +1,6 @@
 # SERA 要件定義書 — モジュール構成
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -49,7 +49,7 @@ src/sera/
     tree_ops.py                    # draft / debug / improve 3オペレータ（§6.5）
     priority.py                    # compute_priority, compute_exploration_bonus（§6.3）
     validation.py                  # validate_experiment_config（§6.6.1）
-    failure_extractor.py           # Phase B: ECHO軽量版 失敗知識抽出（§26.4.3）
+    failure_extractor.py           # Phase B: ECHO軽量版 失敗知識抽出（§25.4.3）
 
   execution/                       # Phase 3: 実験実行
     __init__.py
@@ -70,8 +70,8 @@ src/sera/
     ppo_trainer.py                 # PPOTrainer（trl ラップ）
     reward.py                      # compute_reward, compute_reward_v2
     rollout.py                     # PPORollout, PPORolloutV2 データクラス
-    turn_reward.py                 # Phase A: ターンレベル報酬評価器（§26.4.2 TurnRewardSpec）
-    hierarchical_ppo.py            # Phase C: HiPER 3層階層PPO（§26.5）
+    turn_reward.py                 # Phase A: ターンレベル報酬評価器（§25.4.2 TurnRewardSpec）
+    hierarchical_ppo.py            # Phase C: HiPER 3層階層PPO（§25.5）
 
   lineage/                         # Phase 6: 系譜管理
     __init__.py
@@ -91,12 +91,12 @@ src/sera/
   agent/                           # エージェントLLM（tool-calling対応）
     __init__.py
     agent_llm.py                   # AgentLLM（ベースモデル+LoRA管理、推論、call_function統一エントリ）
-    agent_functions.py             # AgentFunctionRegistry + パースユーティリティ（§28）
-    agent_loop.py                  # AgentLoop — ReAct型反復ループ（§29）
-    tool_executor.py               # ToolExecutor — 18ツールディスパッチ（§29）
-    tool_policy.py                 # ToolPolicy — 安全制御・レート制限（§29）
+    agent_functions.py             # AgentFunctionRegistry + パースユーティリティ（§27）
+    agent_loop.py                  # AgentLoop — ReAct型反復ループ（§28）
+    tool_executor.py               # ToolExecutor — 18ツールディスパッチ（§28）
+    tool_policy.py                 # ToolPolicy — 安全制御・レート制限（§28）
     prompt_templates.py            # 各Phase用プロンプトテンプレート
-    functions/                     # 19関数の定義・ハンドラ（§28）
+    functions/                     # 19関数の定義・ハンドラ（§27）
       __init__.py
       search_functions.py          # search_draft, search_debug, search_improve
       execution_functions.py       # experiment_code_gen
@@ -104,7 +104,7 @@ src/sera/
       paper_functions.py           # paper系8関数
       evaluation_functions.py      # paper_review, paper_review_reflection, meta_review
       phase0_functions.py          # query_generation, paper_clustering
-    tools/                         # 18ツールのハンドラ実装（§29）
+    tools/                         # 18ツールのハンドラ実装（§28）
       __init__.py
       search_tools.py              # Web/API検索ツール（6個）
       execution_tools.py           # コード実行ツール（3個）
@@ -125,7 +125,7 @@ tests/
   test_evaluation/                 # 統計評価テスト
   test_lineage/                    # materialize/squash テスト
   test_paper/                      # 論文生成テスト
-  test_agent/                      # Agent系テスト（§28/§29）
+  test_agent/                      # Agent系テスト（§27/§28）
     test_agent_functions.py        # レジストリ・パース・ハンドラ
     test_agent_loop.py             # AgentLoop制御・停止条件
     test_tool_executor.py          # ツールディスパッチ・ポリシー

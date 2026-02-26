@@ -1,6 +1,6 @@
 # SERA 要件定義書 — 付録
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -30,13 +30,13 @@
 - Scholar公式APIがない可能性→第三者API/代替API前提
 - SERA対応：Phase 0（優先順位＋再現ログ）
 
-### A-6 LLM Agent信用割当・階層RL（§26関連）
+### A-6 LLM Agent信用割当・階層RL（§25関連）
 - HiPER：3層階層RL（Switch/High/Low）、境界Bootstrapping、明示的報酬分解（arxiv:2602.16165）
 - ECHO：Hindsight Trajectory Rewriting、失敗軌道からの事後学習、MDL更新則（arxiv:2510.10304）
 - MT-GRPO：ターンレベルMDPでのGRPO適用、マルチターンエージェント学習
 - AgentPRM/TRM：プロセス報酬モデルによる中間ステップ評価
 - ECHO-2：分散RL基盤、Bounded Staleness、コスト最適ワーカープロビジョニング（arxiv:2602.02192）
-- SERA対応：§26 Tool-Using Agent拡張（Phase A: MT-GRPO、Phase B: ECHO軽量版、Phase C: HiPER）
+- SERA対応：§25 Tool-Using Agent拡張（Phase A: MT-GRPO、Phase B: ECHO軽量版、Phase C: HiPER）
 
 ---
 
@@ -69,7 +69,7 @@
 
 ## 付録C：AgentLLM インターフェース（tool-calling対応）
 
-> **v13.0 更新**: 以下のインターフェース定義は初期設計時のもの。実装では `ToolRegistry` は `ToolExecutor`（§29）に、`load_tools()` は `AgentLoop` 統合に置き換えられている。`call_function()`（§28）が統一エントリポイントとして単発生成と AgentLoop を自動切替する。ツール・関数の有効化は PlanSpec §5.8 `agent_commands` で Phase 1 に凍結される。実際の実装は `src/sera/agent/agent_llm.py` を参照。
+> **v13.1 更新**: 以下のインターフェース定義は初期設計時のもの。実装では `ToolRegistry` は `ToolExecutor`（§28）に、`load_tools()` は `AgentLoop` 統合に置き換えられている。`call_function()`（§27）が統一エントリポイントとして単発生成と AgentLoop を自動切替する。ツール・関数の有効化は PlanSpec §5.8 `agent_commands` で Phase 1 に凍結される。実際の実装は `src/sera/agent/agent_llm.py` を参照。
 
 ```python
 from pydantic import BaseModel
@@ -130,7 +130,10 @@ class AgentLLM:
     def generate(self, prompt: str, purpose: str, adapter_node_id: str | None = None,
                  temperature: float | None = None, max_tokens: int | None = None) -> GenerationOutput:
         """
-        LLM推論を実行し、結果をログに記録する。統一戻り値型 GenerationOutput を返す。
+        LLM推論を実行し、結果をログに記録する。
+
+        注: 実装では後方互換性のため generate() は str を返す。
+        GenerationOutput が必要な場合は generate_full() を使用する。
 
         Args:
             prompt: 入力テキスト

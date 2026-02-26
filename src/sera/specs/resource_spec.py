@@ -15,9 +15,7 @@ class SlurmConfig(BaseModel):
     partition: str = Field("gpu", description="SLURM partition name")
     account: str = Field("", description="SLURM account / project")
     time_limit: str = Field("04:00:00", description="Wall-clock time limit")
-    modules: list[str] = Field(
-        default_factory=lambda: ["cuda/12.1", "python/3.11"], description="Environment modules to load"
-    )
+    modules: list[str] = Field(default_factory=list, description="Environment modules to load")
     sbatch_extra: list[str] = Field(default_factory=list, description="Extra sbatch directives")
 
 
@@ -75,6 +73,21 @@ class SandboxConfig(BaseModel):
     isolate_experiments: bool = Field(True, description="Run each experiment in an isolated environment")
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server."""
+
+    name: str = Field(..., description="Server name")
+    url: str = Field(..., description="Server URL")
+    tools: list[str] = Field(default_factory=list, description="Allowed tool names from this server")
+    auth_token_env: str = Field("", description="Env var name for auth token")
+
+
+class MCPConfig(BaseModel):
+    """Model Context Protocol configuration."""
+
+    servers: list[MCPServerConfig] = Field(default_factory=list, description="MCP server configurations")
+
+
 class ResourceSpecModel(BaseModel):
     """Top-level resource specification."""
 
@@ -83,6 +96,7 @@ class ResourceSpecModel(BaseModel):
     api_keys: ApiKeysConfig = Field(default_factory=ApiKeysConfig, description="API key env-var names")
     storage: StorageConfig = Field(default_factory=StorageConfig, description="Storage settings")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig, description="Sandboxing settings")
+    mcp: MCPConfig = Field(default_factory=MCPConfig, description="MCP server configuration")
 
     @model_validator(mode="before")
     @classmethod

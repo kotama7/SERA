@@ -188,12 +188,14 @@ class RelatedWorkEngine:
         if self._agent_llm is not None:
             try:
                 prompt = (
-                    "Given the following research task, generate exactly 3 search "
+                    "Given the following research task, generate 3 to 5 search "
                     "queries for finding related academic papers. Each query must "
                     "belong to a different category:\n"
                     "1. Main query: directly about the core research topic\n"
                     "2. Method query: about methods/techniques used in this area\n"
-                    "3. Baseline query: about established baselines and benchmarks\n\n"
+                    "3. Baseline query: about established baselines and benchmarks\n"
+                    "4. Application query: about real-world applications of this research (optional)\n"
+                    "5. Survey query: about surveys or reviews in this area (optional)\n\n"
                     "Return one query per line, no numbering or labels.\n\n"
                     f"Task: {input1.task.brief}\n"
                     f"Domain: {input1.domain.field}"
@@ -557,19 +559,12 @@ class RelatedWorkEngine:
         # Extract common datasets mentioned in paper abstracts
         common_datasets: list[dict[str, Any]] = []
         dataset_mentions: dict[str, int] = {}
-        # Check if Input-1 specifies a dataset
-        input_dataset = getattr(input1.task, "dataset", None) or getattr(input1, "dataset", None)
-        if input_dataset:
-            ds_name = getattr(input_dataset, "name", str(input_dataset)) if not isinstance(input_dataset, str) else input_dataset
-            if ds_name:
-                dataset_mentions[ds_name] = dataset_mentions.get(ds_name, 0) + len(top_papers)
 
         # Scan abstracts for dataset names (case-insensitive, whole word)
         import re as _re
         for p in top_papers:
             if not p.abstract:
                 continue
-            abstract_lower = p.abstract.lower()
             # Look for common dataset name patterns: "on the X dataset", "X benchmark"
             for match in _re.finditer(r"(?:on\s+(?:the\s+)?|using\s+(?:the\s+)?)([A-Z][A-Za-z0-9\-]+)(?:\s+(?:dataset|benchmark|corpus))", p.abstract):
                 name = match.group(1)

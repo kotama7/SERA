@@ -39,7 +39,7 @@ class LineageManager:
             <adapter_node_id>/
               meta.json
               adapter_delta.safetensors   # delta from parent
-              adapter_snapshot.safetensors # full weights (optional)
+              snapshot.safetensors         # full weights (optional)
 
     Parameters
     ----------
@@ -173,7 +173,7 @@ class LineageManager:
         snapshot_idx = -1
         for i, nid in enumerate(path):
             node_dir = self.nodes_dir / nid
-            if (node_dir / "adapter_snapshot.safetensors").exists():
+            if (node_dir / "snapshot.safetensors").exists():
                 snapshot_idx = i
 
         # Determine best starting point: cached ancestor or deepest snapshot
@@ -182,7 +182,7 @@ class LineageManager:
             remaining_path = path[cached_ancestor_idx + 1:]
         elif snapshot_idx >= 0:
             snapshot_nid = path[snapshot_idx]
-            snapshot_path = self.nodes_dir / snapshot_nid / "adapter_snapshot.safetensors"
+            snapshot_path = self.nodes_dir / snapshot_nid / "snapshot.safetensors"
             accumulated = {
                 k: v.clone() for k, v in load_file(str(snapshot_path)).items()
             }
@@ -263,7 +263,7 @@ class LineageManager:
         """Materialise and save a snapshot for a single node."""
         weights = self.materialize(adapter_node_id)
         node_dir = self.nodes_dir / adapter_node_id
-        snapshot_path = node_dir / "adapter_snapshot.safetensors"
+        snapshot_path = node_dir / "snapshot.safetensors"
         clean = {k: v.contiguous().cpu() for k, v in weights.items()}
         save_file(clean, str(snapshot_path))
 

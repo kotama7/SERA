@@ -609,7 +609,8 @@ class TreeOps:
         """
         exec_spec = getattr(self.specs, "execution", None)
         search_cfg = getattr(exec_spec, "search", None) if exec_spec else None
-        sibling_context_k = getattr(search_cfg, "sibling_context_k", 5) if search_cfg else 5
+        branch_factor = getattr(search_cfg, "branch_factor", 3) if search_cfg else 3
+        sibling_context_k = getattr(search_cfg, "sibling_context_k", min(branch_factor * 2, 10)) if search_cfg else 5
         if not isinstance(sibling_context_k, int):
             sibling_context_k = 5
 

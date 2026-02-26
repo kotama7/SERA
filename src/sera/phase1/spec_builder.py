@@ -19,12 +19,8 @@ class SpecBuilder:
         """Generate ProblemSpec JSON using LLM, with up to 3 retries on validation failure."""
         from sera.agent.prompt_templates import SPEC_GENERATION_PROMPT
 
-        context = self._build_context(input1, related_work)
-        prompt = SPEC_GENERATION_PROMPT.format(
-            context=context,
-            spec_type="ProblemSpec",
-            schema_description=self._problem_spec_schema(),
-        )
+        fields = self._extract_prompt_fields(input1, related_work)
+        prompt = SPEC_GENERATION_PROMPT.format_map(fields)
 
         for attempt in range(3):
             temperature = 0.7 + attempt * 0.1
@@ -57,14 +53,32 @@ class SpecBuilder:
             else:
                 logger.warning(f"JSON parse failed (attempt {attempt + 1})")
 
-        # Fallback: return defaults
+        # Fallback: return defaults with Input-1 fields mapped
         logger.warning("All ProblemSpec generation attempts failed, using defaults")
-        from sera.specs.problem_spec import ProblemSpecModel
+        from sera.specs.problem_spec import ProblemSpecModel, ObjectiveConfig
 
+        if isinstance(input1, dict):
+            task_brief = input1.get("task", {}).get("brief", "Research")
+            goal = input1.get("goal", {})
+            goal_metric = goal.get("metric", "")
+            goal_direction = goal.get("direction", "maximize")
+            goal_objective = goal.get("objective", "")
+        else:
+            task_obj = getattr(input1, "task", None)
+            task_brief = getattr(task_obj, "brief", "Research") if task_obj else "Research"
+            goal_obj = getattr(input1, "goal", None)
+            goal_metric = getattr(goal_obj, "metric", "") if goal_obj else ""
+            goal_direction = getattr(goal_obj, "direction", "maximize") if goal_obj else "maximize"
+            goal_objective = getattr(goal_obj, "objective", "") if goal_obj else ""
+
+        objective_cfg = ObjectiveConfig(
+            description=goal_objective or task_brief,
+            metric_name=goal_metric or "score",
+            direction=goal_direction,
+        )
         defaults = ProblemSpecModel(
-            title=getattr(input1, "task", input1.get("task", {})).get("brief", "Research")
-            if isinstance(input1, dict)
-            else getattr(getattr(input1, "task", None), "brief", "Research"),
+            title=task_brief,
+            objective=objective_cfg,
         )
         return defaults.model_dump()
 
@@ -72,12 +86,9 @@ class SpecBuilder:
         """Generate PlanSpec JSON using LLM."""
         from sera.agent.prompt_templates import SPEC_GENERATION_PROMPT
 
-        prompt = SPEC_GENERATION_PROMPT.format(
-            context=f"Input-1: {json.dumps(input1 if isinstance(input1, dict) else input1.model_dump(), default=str)}\n"
-            f"ProblemSpec: {json.dumps(problem_spec if isinstance(problem_spec, dict) else problem_spec.model_dump(), default=str)}",
-            spec_type="PlanSpec",
-            schema_description=self._plan_spec_schema(),
-        )
+        rw = problem_spec if isinstance(problem_spec, dict) else (problem_spec.model_dump() if hasattr(problem_spec, "model_dump") else {})
+        fields = self._extract_prompt_fields(input1, rw)
+        prompt = SPEC_GENERATION_PROMPT.format_map(fields)
 
         for attempt in range(3):
             temperature = 0.7 + attempt * 0.1
@@ -266,6 +277,45 @@ class SpecBuilder:
             paper=paper_cfg,
         )
         return exec_spec.model_dump()
+
+    def _extract_prompt_fields(self, input1: Any, related_work: Any) -> dict[str, str]:
+        """Extract individual fields from Input-1 and RelatedWork for prompt template formatting."""
+        i1 = input1 if isinstance(input1, dict) else (input1.model_dump() if hasattr(input1, "model_dump") else {})
+        rw = related_work if isinstance(related_work, dict) else (related_work.model_dump() if hasattr(related_work, "model_dump") else {})
+
+        task = i1.get("task", {}) if isinstance(i1.get("task"), dict) else {}
+        domain = i1.get("domain", {}) if isinstance(i1.get("domain"), dict) else {}
+        goal = i1.get("goal", {}) if isinstance(i1.get("goal"), dict) else {}
+        data = i1.get("data", {}) if isinstance(i1.get("data"), dict) else {}
+
+        # Build related work summaries
+        papers = rw.get("papers", [])
+        clusters = rw.get("clusters", [])
+        baselines = rw.get("baseline_candidates", [])
+        metrics = rw.get("common_metrics", [])
+        open_problems = rw.get("open_problems", [])
+
+        rw_summary = "\n".join(
+            f"- {p.get('title', 'Untitled')} ({p.get('year', '?')})" for p in papers[:10]
+        ) if papers else "No related work available."
+
+        return {
+            "task_brief": task.get("brief", "Research task"),
+            "field": domain.get("field", ""),
+            "subfield": domain.get("subfield", ""),
+            "data_description": data.get("description", ""),
+            "data_format": data.get("format", ""),
+            "data_size": data.get("size_hint", ""),
+            "goal_objective": goal.get("objective", ""),
+            "goal_direction": goal.get("direction", "maximize"),
+            "baseline": goal.get("baseline", ""),
+            "constraints_json": json.dumps(i1.get("constraints", []), default=str),
+            "notes": i1.get("notes", ""),
+            "related_work_summary": rw_summary,
+            "baseline_candidates_json": json.dumps(baselines, default=str),
+            "common_metrics_json": json.dumps(metrics, default=str),
+            "open_problems_json": json.dumps(open_problems, default=str),
+        }
 
     def _build_context(self, input1: Any, related_work: Any) -> str:
         """Build context string from Input-1 and RelatedWorkSpec."""

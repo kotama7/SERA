@@ -26,6 +26,7 @@ class EvidenceStore:
     problem_spec: Any = None
     related_work: Any = None
     execution_spec: Any = None
+    ablation_results: list[dict] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Markdown tables
@@ -82,6 +83,13 @@ class EvidenceStore:
                         "config": diff,
                     }
         return ablations
+
+    def add_ablation_data(self, data: dict | list) -> None:
+        """Add auto-ablation results."""
+        if isinstance(data, list):
+            self.ablation_results.extend(data)
+        elif isinstance(data, dict):
+            self.ablation_results.append(data)
 
     # ------------------------------------------------------------------
     # Convergence data

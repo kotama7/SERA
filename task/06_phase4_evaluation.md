@@ -1,6 +1,6 @@
 # SERA 要件定義書 — Phase 4: 統計評価
 
-> 本ファイルは TASK.md v13.0 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -11,7 +11,7 @@
   - 平均 `μ = mean(values)`
   - 標準誤差 `SE = std(values) / sqrt(n)`
   - `LCB = μ - c * SE`（c = ExecutionSpec.evaluation.lcb_coef）
-  - `UCB = μ + c * SE`（参考記録用）
+  - `UCB = μ + c * SE`（参考記録用、eval_log.jsonl に `ucb` フィールドとして記録）
 
 ### 8.2 逐次評価（sequential eval：具体アルゴリズム）
 ```python
