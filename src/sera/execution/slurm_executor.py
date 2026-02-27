@@ -48,6 +48,74 @@ class SlurmJobHandle:
         return str(self.job.job_id)
 
 
+def _build_container_cmd(
+    container_config: dict[str, Any],
+    run_dir: str,
+    inner_cmd: list[str],
+) -> list[str]:
+    """Build a container-wrapped command from ContainerConfig fields.
+
+    Parameters
+    ----------
+    container_config : dict
+        Serialised ContainerConfig with keys: runtime, image, bind_mounts,
+        env_vars, gpu_enabled, extra_flags, overlay, writable_tmpfs.
+    run_dir : str
+        Run directory to auto-bind into the container.
+    inner_cmd : list[str]
+        The command to execute inside the container.
+
+    Returns
+    -------
+    list[str]
+        Full command list with container runtime prefix.
+    """
+    runtime = container_config.get("runtime", "singularity")
+    image = container_config.get("image", "")
+    bind_mounts: list[str] = container_config.get("bind_mounts", [])
+    env_vars: dict[str, str] = container_config.get("env_vars", {})
+    gpu_enabled: bool = container_config.get("gpu_enabled", True)
+    extra_flags: list[str] = container_config.get("extra_flags", [])
+    overlay: str = container_config.get("overlay", "")
+    writable_tmpfs: bool = container_config.get("writable_tmpfs", False)
+
+    if runtime in ("singularity", "apptainer"):
+        cmd = [runtime, "exec"]
+        if gpu_enabled:
+            cmd.append("--nv")
+        # Auto-bind run_dir
+        all_binds = [f"{run_dir}:{run_dir}"] + list(bind_mounts)
+        for bind in all_binds:
+            cmd.extend(["--bind", bind])
+        for key, val in env_vars.items():
+            cmd.extend(["--env", f"{key}={val}"])
+        if overlay:
+            cmd.extend(["--overlay", overlay])
+        if writable_tmpfs:
+            cmd.append("--writable-tmpfs")
+        cmd.extend(extra_flags)
+        cmd.append(image)
+        cmd.extend(inner_cmd)
+    elif runtime == "docker":
+        cmd = ["docker", "run", "--rm"]
+        if gpu_enabled:
+            cmd.extend(["--gpus", "all"])
+        # Auto-bind run_dir
+        all_binds = [f"{run_dir}:{run_dir}"] + list(bind_mounts)
+        for bind in all_binds:
+            cmd.extend(["-v", bind])
+        for key, val in env_vars.items():
+            cmd.extend(["-e", f"{key}={val}"])
+        cmd.extend(["-w", run_dir])
+        cmd.extend(extra_flags)
+        cmd.append(image)
+        cmd.extend(inner_cmd)
+    else:
+        raise ValueError(f"Unsupported container runtime: {runtime}")
+
+    return cmd
+
+
 def _run_experiment(
     interpreter_command: str,
     script_path: str,
@@ -55,12 +123,14 @@ def _run_experiment(
     run_dir: str,
     modules: list[str],
     seed_arg_format: str = "--seed {seed}",
+    container_config: dict[str, Any] | None = None,
 ) -> int:
     """Callable submitted to SLURM via submitit.
 
     This function runs inside the SLURM job. It loads environment modules,
     executes the experiment script as a subprocess, and returns the exit code.
     Supports multi-language experiments via configurable interpreter and seed format.
+    Supports container execution (Singularity/Apptainer/Docker) via container_config.
     """
     import os
 
@@ -72,9 +142,15 @@ def _run_experiment(
     stdout_path = run_dir_path / "stdout.log"
     stderr_path = run_dir_path / "stderr.log"
 
-    cmd = [interpreter_command, script_path]
+    inner_cmd = [interpreter_command, script_path]
     if seed_arg_format:
-        cmd.extend(seed_arg_format.format(seed=seed).split())
+        inner_cmd.extend(seed_arg_format.format(seed=seed).split())
+
+    # Wrap in container if configured
+    if container_config and container_config.get("enabled"):
+        cmd = _build_container_cmd(container_config, run_dir, inner_cmd)
+    else:
+        cmd = inner_cmd
 
     with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
         proc = subprocess.Popen(
@@ -131,6 +207,10 @@ class SlurmExecutor(Executor):
         self.seed_arg_format = seed_arg_format
         self.poll_interval_sec = poll_interval_sec
         self._sacct_available = self._check_sacct_available()
+        # Container config (§23.6): serialize to dict for pickling across SLURM
+        self._container_config: dict[str, Any] | None = None
+        if slurm_config.container and slurm_config.container.enabled:
+            self._container_config = slurm_config.container.model_dump()
 
     def run(
         self,
@@ -246,6 +326,7 @@ class SlurmExecutor(Executor):
             str(run_dir),
             self.slurm_config.modules,
             seed_fmt,
+            self._container_config,
         )
 
         logger.info("SLURM job %s submitted for node %s", job.job_id, node_id[:8])
@@ -430,6 +511,7 @@ class SlurmExecutor(Executor):
             str(run_dir),
             self.slurm_config.modules,
             seed_fmt,
+            self._container_config,
         )
 
         logger.info(

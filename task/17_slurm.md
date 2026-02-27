@@ -1,6 +1,6 @@
 # SERA 要件定義書 — SLURM実行パイプライン
 
-> 本ファイルは TASK.md v13.1 を分割したものである。目次は [README.md](./README.md) を参照。
+> 本ファイルは TASK.md v13.3 を分割したものである。目次は [README.md](./README.md) を参照。
 
 ---
 
@@ -446,6 +446,260 @@ learning_enabled = getattr(specs.execution.learning, "enabled", True)
 
 PPO/Lineage無効時でも探索ループ（Phase 2-4）は正常に動作する。
 
+### 23.6 SLURM + コンテナ統合（Singularity / Apptainer / Docker）
+
+HPC クラスタでは SLURM と Singularity/Apptainer の組み合わせが標準的な実行環境である。現在の `SlurmExecutor` は素の `subprocess` 実行のみをサポートしており、コンテナ化された実験環境に未対応である。本節では `SlurmConfig` 内に `ContainerConfig` をネストし、SLURM ジョブ内でのコンテナ実行をサポートする。
+
+#### 23.6.1 ContainerConfig 定義
+
+`SlurmConfig` 内にネストする。`enabled: false`（デフォルト）で既存動作に影響しない：
+
+| フィールド | 型 | デフォルト | 説明 |
+|-----------|-----|-----------|------|
+| `enabled` | `bool` | `False` | コンテナ実行を有効化 |
+| `runtime` | `str` | `"singularity"` | コンテナランタイム（`"singularity"`, `"apptainer"`, `"docker"`） |
+| `image` | `str` | `""` | コンテナイメージ（URI or `.sif` パス）。例: `"docker://nvcr.io/nvidia/pytorch:24.01-py3"`, `"/shared/images/sera.sif"` |
+| `bind_mounts` | `list[str]` | `[]` | バインドマウント（例: `["/data:/data", "/scratch:/scratch"]`） |
+| `env_vars` | `dict[str, str]` | `{}` | コンテナ内に渡す環境変数 |
+| `gpu_enabled` | `bool` | `True` | GPU パススルー（Singularity: `--nv`, Apptainer: `--nv`, Docker: `--gpus all`） |
+| `extra_flags` | `list[str]` | `[]` | ランタイム固有の追加フラグ |
+| `overlay` | `str` | `""` | オーバーレイファイルシステム（Singularity/Apptainer のみ。例: `"/scratch/overlay.img"`) |
+| `writable_tmpfs` | `bool` | `False` | 書き込み可能な tmpfs を有効化（Singularity/Apptainer: `--writable-tmpfs`） |
+
+全フィールドは Frozen 層に属し、Phase 1 以降は不変である。
+
+#### 23.6.2 YAML 設定例
+
+**Singularity + SLURM の例**:
+
+```yaml
+slurm:
+  partition: gpu
+  account: my_project
+  time_limit: "04:00:00"
+  modules:
+    - singularity/3.11
+  sbatch_extra:
+    - "--gres=gpu:a100:2"
+  container:
+    enabled: true
+    runtime: singularity
+    image: "/shared/images/sera_pytorch.sif"
+    bind_mounts:
+      - "${SERA_WORKSPACE}:/workspace"
+      - "/data:/data:ro"
+    env_vars:
+      PYTHONPATH: "/workspace"
+    gpu_enabled: true
+    writable_tmpfs: true
+```
+
+**Apptainer + SLURM の例**:
+
+```yaml
+slurm:
+  partition: gpu
+  account: my_project
+  time_limit: "04:00:00"
+  modules:
+    - apptainer/1.2
+  container:
+    enabled: true
+    runtime: apptainer
+    image: "docker://nvcr.io/nvidia/pytorch:24.01-py3"
+    bind_mounts:
+      - "${SERA_WORKSPACE}:/workspace"
+      - "/scratch/${USER}:/scratch"
+    env_vars:
+      CUDA_VISIBLE_DEVICES: "0,1"
+    gpu_enabled: true
+    extra_flags:
+      - "--cleanenv"
+    overlay: "/scratch/${USER}/overlay.img"
+```
+
+#### 23.6.3 `_run_experiment` のコンテナラッピング
+
+`_run_experiment()` 内で、`ContainerConfig.enabled == True` の場合、実験コマンドをコンテナ `exec` でラッピングする：
+
+```text
+_run_experiment(interpreter_command, script_path, seed, run_dir, modules, seed_arg_format, container_config)
+  │
+  ├─ container_config.enabled == False の場合:
+  │   └─ 既存パス: [interpreter_command, script_path, seed_arg]
+  │
+  └─ container_config.enabled == True の場合:
+      │
+      ├─ 1. ベースコマンド構築
+      │     runtime = container_config.runtime  # "singularity" | "apptainer" | "docker"
+      │
+      │     ■ Singularity / Apptainer:
+      │       cmd = [runtime, "exec"]
+      │       gpu_enabled → cmd += ["--nv"]
+      │       writable_tmpfs → cmd += ["--writable-tmpfs"]
+      │       overlay → cmd += ["--overlay", overlay]
+      │       for mount in bind_mounts:
+      │           cmd += ["--bind", mount]
+      │       for key, val in env_vars.items():
+      │           cmd += ["--env", f"{key}={val}"]
+      │       cmd += extra_flags
+      │       cmd += [image]
+      │       cmd += [interpreter_command, script_path, seed_arg]
+      │
+      │     ■ Docker:
+      │       cmd = ["docker", "run", "--rm"]
+      │       gpu_enabled → cmd += ["--gpus", "all"]
+      │       for mount in bind_mounts:
+      │           cmd += ["-v", mount]
+      │       for key, val in env_vars.items():
+      │           cmd += ["-e", f"{key}={val}"]
+      │       cmd += extra_flags
+      │       cmd += [image]
+      │       cmd += [interpreter_command, script_path, seed_arg]
+      │
+      ├─ 2. 実行
+      │     subprocess.Popen(cmd, stdout=..., stderr=..., cwd=run_dir)
+      │     ※ run_dir は自動的に bind_mounts に追加（ユーザー指定がない場合）
+      │
+      └─ 3. 結果返却
+            exit code, stdout/stderr は既存の RunResult 契約に準拠
+```
+
+**生成されるコマンド例**（Singularity）:
+
+```bash
+singularity exec --nv --writable-tmpfs \
+  --bind /home/user/sera_workspace/runs/abc123:/workspace \
+  --bind /data:/data:ro \
+  --env PYTHONPATH=/workspace \
+  /shared/images/sera_pytorch.sif \
+  python /workspace/experiment.py --seed 42
+```
+
+**生成されるコマンド例**（Apptainer）:
+
+```bash
+apptainer exec --nv --cleanenv \
+  --overlay /scratch/user/overlay.img \
+  --bind /home/user/sera_workspace/runs/abc123:/workspace \
+  --env CUDA_VISIBLE_DEVICES=0,1 \
+  docker://nvcr.io/nvidia/pytorch:24.01-py3 \
+  python /workspace/experiment.py --seed 42
+```
+
+#### 23.6.4 run_dir の自動バインド
+
+コンテナ内から実験スクリプトと `metrics.json` 出力先にアクセスするため、`run_dir`（`runs/{node_id}/`）は自動的にバインドマウントに追加する：
+
+```text
+auto_bind = f"{run_dir}:{run_dir}"
+if auto_bind not in container_config.bind_mounts:
+    effective_bind_mounts = [auto_bind] + container_config.bind_mounts
+```
+
+これにより、コンテナ内からの `metrics.json` 書き込みがホスト側に反映され、既存の `RunResult.metrics_path` 契約が維持される。
+
+#### 23.6.5 コンテナイメージの事前準備ガイダンス
+
+**Singularity/Apptainer の `.sif` ファイル作成**:
+
+```bash
+# Docker Hub イメージから変換
+singularity build sera_pytorch.sif docker://nvcr.io/nvidia/pytorch:24.01-py3
+
+# Singularity レシピから
+singularity build sera_pytorch.sif sera.def
+```
+
+**推奨イメージ内容**:
+- Python 3.11+ + 実験に必要なライブラリ
+- CUDA ランタイム（GPU 使用時）
+- コンパイル型言語サポート時（§7.3.2）: 該当コンパイラ（`g++`, `cargo`, `go`）
+- `metrics.json` を書き込めるディレクトリのパーミッション
+
+**注意事項**:
+- `.sif` ファイルは共有ファイルシステム上に配置（各ノードからアクセス可能であること）
+- Docker URI（`docker://...`）は初回実行時にプルされるため、ネットワークアクセスが必要
+- キャッシュされたイメージは `~/.singularity/cache`（Singularity）または `~/.apptainer/cache`（Apptainer）に保存
+
+#### 23.6.6 Docker on SLURM の注意事項
+
+SLURM クラスタで Docker を使用する場合の制約と推奨事項：
+
+| 項目 | 注意事項 |
+|------|---------|
+| **権限** | Docker デーモンへのアクセスには通常 root 権限が必要。HPC 環境では Singularity/Apptainer を推奨 |
+| **セキュリティ** | 多くの HPC サイトでは Docker の使用を禁止している。サイトポリシーを確認すること |
+| **ネットワーク** | 計算ノードからのネットワークアクセスが制限されている場合、イメージの事前プルが必要 |
+| **GPU** | `--gpus all` は NVIDIA Container Toolkit が必要 |
+| **ファイルシステム** | Docker の `-v` マウントは共有ファイルシステム上のパスを使用すること |
+| **推奨** | HPC 環境では `runtime: "singularity"` または `runtime: "apptainer"` を優先使用 |
+
+#### 23.6.7 Spec モデル拡張
+
+`SlurmConfig`（`src/sera/specs/resource_spec.py`）に `container` フィールドを追加する：
+
+```python
+class ContainerConfig(BaseModel):
+    enabled: bool = False
+    runtime: str = "singularity"        # "singularity" | "apptainer" | "docker"
+    image: str = ""
+    bind_mounts: list[str] = []
+    env_vars: dict[str, str] = {}
+    gpu_enabled: bool = True
+    extra_flags: list[str] = []
+    overlay: str = ""
+    writable_tmpfs: bool = False
+
+class SlurmConfig(BaseModel):
+    partition: str = "gpu"
+    account: str = ""
+    time_limit: str = "04:00:00"
+    modules: list[str] = []
+    sbatch_extra: list[str] = []
+    container: ContainerConfig = ContainerConfig()  # 新規追加
+```
+
+#### 23.6.8 SlurmExecutor の変更
+
+`SlurmExecutor.__init__()` が `ContainerConfig` を受け取り、`_run_experiment()` に渡す：
+
+```python
+class SlurmExecutor(Executor):
+    def __init__(
+        self,
+        work_dir: Path,
+        slurm_config: SlurmConfig,
+        compute_config: ComputeConfig | None = None,
+        interpreter_command: str = "python",
+        seed_arg_format: str | None = None,
+    ):
+        # 既存フィールド
+        self._container_config = slurm_config.container  # 新規: SlurmConfig からネスト取得
+```
+
+`submit` 呼び出しで `_run_experiment` に `container_config` を追加引数として渡す。`ContainerConfig.enabled == False` の場合は既存動作と完全に同一である。
+
+#### 23.6.9 テスト計画
+
+| テストケース | 概要 |
+|-------------|------|
+| `test_container_config_defaults` | `enabled=False` のデフォルト値で既存動作に影響なし |
+| `test_container_config_singularity` | Singularity 設定の YAML パース・バリデーション |
+| `test_container_config_apptainer` | Apptainer 設定の YAML パース・バリデーション |
+| `test_container_config_docker` | Docker 設定の YAML パース・バリデーション |
+| `test_container_command_singularity` | Singularity exec コマンドが正しく構築されること |
+| `test_container_command_apptainer` | Apptainer exec コマンドが正しく構築されること |
+| `test_container_command_docker` | Docker run コマンドが正しく構築されること |
+| `test_container_gpu_flag` | `gpu_enabled=True` → `--nv`（Singularity）/ `--gpus all`（Docker） |
+| `test_container_gpu_disabled` | `gpu_enabled=False` → GPU フラグなし |
+| `test_container_bind_mounts` | バインドマウントが正しくコマンドに反映されること |
+| `test_container_auto_bind_run_dir` | `run_dir` が自動的にバインドされること |
+| `test_container_env_vars` | 環境変数が正しくコマンドに反映されること |
+| `test_container_overlay` | オーバーレイ設定が正しくコマンドに反映されること |
+| `test_container_writable_tmpfs` | `--writable-tmpfs` フラグが正しく付与されること |
+| `test_container_disabled_passthrough` | `enabled=False` 時に既存の素の実行パスが使われること |
+
 ### 23.7 非同期パイプライン：SLURM実行時のフェーズ重複回避
 
 #### 23.7.1 課題：逐次ボトルネック
@@ -706,5 +960,728 @@ SIGINT受信
 | `src/sera/search/search_manager.py` | `SearchManager._run_batched_pipeline()`, `_batch_generate()`, `_batch_evaluate_and_learn()` | バッチパイプライン制御（SLURM使用時） |
 | `src/sera/specs/resource_spec.py` | `ComputeConfig`, `SlurmConfig` | SLURM設定スキーマ |
 | `src/sera/specs/model_spec.py` | `InferenceConfig` | vLLM設定スキーマ |
+
+### 23.9 分散SLURMアーキテクチャ（Distributed SLURM Architecture）
+
+#### 23.9.1 課題：ヘッドノードGPU依存
+
+§23.1 のアーキテクチャではvLLM推論・PPO学習がヘッドノード上で動作するため、以下の制約がある：
+
+| 課題 | 詳細 |
+|------|------|
+| **ログインノードのGPU制限** | 多くのHPCサイトではログインノードにGPUがない、またはGPU使用が禁止されている |
+| **リソース競合** | ヘッドノード上でvLLMとPPOのGPUメモリ協調が必要（§23.3.4 sleep/wake） |
+| **スケーラビリティ** | ヘッドノードのGPUリソースがボトルネック。大規模モデルでは単ノードに収まらない |
+| **ベンチマーク公正性** | 実験実行時に他ジョブの影響を排除できない |
+
+#### 23.9.2 全体設計：ログインノード＝オーケストレーター
+
+分散SLURMアーキテクチャでは、ログインノードはオーケストレーション（制御・調整）のみを担い、**すべてのGPU処理を計算ノード上のSLURMジョブとして実行**する。
+
+```text
+┌─────────────── ログインノード（GPUなし） ──────────────────────┐
+│                                                                  │
+│  ┌─ SearchManager (Orchestrator) ──────────────────────────┐    │
+│  │  ・ノード選択 (open_list管理)                            │    │
+│  │  ・フェーズ間調整 (A→B→C パイプライン制御)               │    │
+│  │  ・チェックポイント保存・復帰                            │    │
+│  │  ・SIGINT → 全ジョブ scancel + 安全停止                  │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│           │                    │                    │             │
+│    srun/sbatch            srun/sbatch          srun/sbatch       │
+│           │                    │                    │             │
+└───────────┼────────────────────┼────────────────────┼─────────────┘
+            ▼                    ▼                    ▼
+┌── 計算ノード群 ─────────────────────────────────────────────────┐
+│                                                                  │
+│  ┌─ vLLM推論ノード ──┐  ┌─ 実験ノード ──┐  ┌─ PPO学習ノード ┐  │
+│  │ (Stage: inference) │  │ (Stage: exp)  │  │ (Stage: train) │  │
+│  │                    │  │               │  │                │  │
+│  │ vLLMサーバー       │  │ experiment.py │  │ PPOTrainer     │  │
+│  │ (OpenAI互換API)    │  │ metrics.json  │  │ LoRAデルタ更新 │  │
+│  │ LoRA hot-swap      │  │               │  │                │  │
+│  └────────────────────┘  └───────────────┘  └────────────────┘  │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**設計原則**：
+- ログインノードは **CPU処理のみ**（GPU不使用）: SLURMジョブ投入・ポーリング・結果収集・探索木管理
+- vLLM推論は計算ノード上で **OpenAI互換APIサーバー** として動作。ログインノードからHTTP経由でアクセス
+- PPO学習は計算ノード上で **バッチジョブ** として実行。学習結果（LoRAデルタ）は共有ファイルシステム経由で回収
+- 実験実行は既存の `SlurmExecutor`（§23.2）をそのまま使用
+
+#### 23.9.3 StageNodeConfig — ステージ別ノード設定
+
+各処理ステージ（推論・実験・学習）に対して、個別のSLURMリソースを設定できる：
+
+```python
+class StageNodeConfig(BaseModel):
+    """Per-stage SLURM node configuration."""
+
+    partition: str = Field("gpu", description="SLURM partition for this stage")
+    nodes: int = Field(1, description="Number of nodes to allocate")
+    gpu_count: int = Field(1, description="GPUs per node")
+    gpu_type: str = Field("", description="GPU type constraint, e.g. 'A100'")
+    cpu_cores: int = Field(8, description="CPU cores per node")
+    memory_gb: int = Field(32, description="RAM per node in GB")
+    time_limit: str = Field("04:00:00", description="Wall-clock time limit (HH:MM:SS)")
+    exclusive: bool = Field(False, description="Request exclusive node allocation (--exclusive)")
+    nodelist: str = Field("", description="Specific node list (--nodelist), e.g. 'gpu[01-04]'")
+    sbatch_extra: list[str] = Field(default_factory=list, description="Additional sbatch directives")
+```
+
+| フィールド | 型 | デフォルト | 説明 |
+|-----------|-----|-----------|------|
+| `partition` | `str` | `"gpu"` | SLURMパーティション |
+| `nodes` | `int` | `1` | 確保ノード数 |
+| `gpu_count` | `int` | `1` | ノードあたりGPU数 |
+| `gpu_type` | `str` | `""` | GPU種別制約（例: `"A100"`） |
+| `cpu_cores` | `int` | `8` | ノードあたりCPUコア数 |
+| `memory_gb` | `int` | `32` | ノードあたりメモリ（GB） |
+| `time_limit` | `str` | `"04:00:00"` | 壁時計時間制限 |
+| `exclusive` | `bool` | `False` | 排他ノード割り当て（`--exclusive`） |
+| `nodelist` | `str` | `""` | 指定ノードリスト（`--nodelist`） |
+| `sbatch_extra` | `list[str]` | `[]` | 追加sbatchディレクティブ |
+
+#### 23.9.4 DistributedSlurmConfig — 分散SLURM設定
+
+```python
+class DistributedSlurmConfig(BaseModel):
+    """Distributed SLURM architecture settings (§23.9)."""
+
+    enabled: bool = Field(False, description="Enable distributed SLURM mode")
+    account: str = Field("", description="SLURM account (shared across stages)")
+    modules: list[str] = Field(default_factory=list, description="Environment modules to load (shared)")
+    inference: StageNodeConfig = Field(
+        default_factory=lambda: StageNodeConfig(gpu_count=1, time_limit="08:00:00"),
+        description="vLLM inference server node config",
+    )
+    experiment: StageNodeConfig = Field(
+        default_factory=StageNodeConfig,
+        description="Experiment execution node config",
+    )
+    training: StageNodeConfig = Field(
+        default_factory=lambda: StageNodeConfig(gpu_count=1, time_limit="02:00:00"),
+        description="PPO training node config",
+    )
+    vllm_mode: str = Field(
+        "persistent", description="vLLM server lifecycle: 'persistent' (long-running) or 'transient' (per-batch)"
+    )
+```
+
+| フィールド | 型 | デフォルト | 説明 |
+|-----------|-----|-----------|------|
+| `enabled` | `bool` | `False` | 分散モード有効化。`False` の場合は既存の §23.1 アーキテクチャ |
+| `account` | `str` | `""` | 共有SLURMアカウント |
+| `modules` | `list[str]` | `[]` | 全ステージ共通の環境モジュール |
+| `inference` | `StageNodeConfig` | gpu_count=1, time_limit="08:00:00" | vLLM推論ノード設定 |
+| `experiment` | `StageNodeConfig` | デフォルト | 実験実行ノード設定 |
+| `training` | `StageNodeConfig` | gpu_count=1, time_limit="02:00:00" | PPO学習ノード設定 |
+| `vllm_mode` | `str` | `"persistent"` | vLLMサーバーライフサイクル |
+
+**`vllm_mode` のルール**：
+
+| `vllm_mode` | `inference.nodes` | `inference.exclusive` | 動作 |
+|-------------|--------------------|-----------------------|------|
+| `"persistent"` | 任意 | 任意 | vLLMサーバーを研究開始時に起動し、終了まで維持 |
+| `"transient"` | `1` | `True`（推奨） | バッチごとにvLLMサーバーを起動・停止 |
+
+`nodes=1` かつ `exclusive=True` の場合は `"transient"` が自動設定される（ノードを効率的に使い回すため）。ユーザが明示的に `"persistent"` を指定した場合はそちらを尊重する。
+
+#### 23.9.5 resource_spec.yaml の設定例
+
+`DistributedSlurmConfig` は `ComputeConfig` 内にネストされる：
+
+```yaml
+# resource_spec.yaml — 分散SLURMモード
+compute:
+  executor_type: slurm
+  gpu_required: true
+
+  slurm:
+    partition: gpu                # 実験ノードのデフォルト（distributed.experimentで上書き可）
+    account: my_project
+    time_limit: "04:00:00"
+    modules:
+      - cuda/12.1
+
+  distributed:
+    enabled: true
+    account: my_project           # 全ステージ共有（stageのpartitionが異なる場合でも同一アカウント）
+    modules:
+      - cuda/12.1
+      - pytorch/2.4
+
+    inference:                    # vLLM推論ノード
+      partition: gpu-large
+      nodes: 1
+      gpu_count: 4
+      gpu_type: A100
+      memory_gb: 256
+      time_limit: "12:00:00"
+      nodelist: "gpu01"           # 特定ノードを指定可
+
+    experiment:                   # 実験実行ノード
+      partition: gpu
+      nodes: 1
+      gpu_count: 1
+      gpu_type: A100
+      memory_gb: 64
+      time_limit: "02:00:00"
+
+    training:                     # PPO学習ノード
+      partition: gpu-large
+      nodes: 1
+      gpu_count: 2
+      gpu_type: A100
+      memory_gb: 128
+      time_limit: "04:00:00"
+
+    vllm_mode: persistent         # 研究中ずっとvLLMサーバーを維持
+```
+
+**ベンチマーク向け排他モード例**：
+
+```yaml
+  distributed:
+    enabled: true
+    account: benchmark_project
+
+    experiment:
+      partition: gpu-exclusive
+      nodes: 1
+      gpu_count: 8
+      gpu_type: H100
+      memory_gb: 512
+      time_limit: "01:00:00"
+      exclusive: true             # 他ジョブと共有しない
+
+    vllm_mode: transient          # 排他ノード1台のため、推論時のみ起動
+```
+
+#### 23.9.6 Spec モデル配置
+
+`DistributedSlurmConfig` と `StageNodeConfig` は `src/sera/specs/resource_spec.py` に配置する。`ComputeConfig` に `distributed` フィールドを追加する：
+
+```python
+class ComputeConfig(BaseModel):
+    executor_type: str = Field("local", description="Execution backend: 'local', 'slurm', 'docker'")
+    # ... 既存フィールド ...
+    slurm: SlurmConfig = Field(default_factory=SlurmConfig)
+    docker: DockerConfig = Field(default_factory=DockerConfig)
+    distributed: DistributedSlurmConfig = Field(
+        default_factory=DistributedSlurmConfig,
+        description="Distributed SLURM architecture (§23.9). Only used when enabled=True and executor_type='slurm'",
+    )
+```
+
+`distributed.enabled == False`（デフォルト）の場合は既存の §23.1 アーキテクチャがそのまま動作し、後方互換性を維持する。
+
+### 23.10 vLLMリモートサーバー管理
+
+分散SLURMモードでは、vLLMはヘッドノード上のインプロセスエンジンではなく、計算ノード上で **OpenAI互換APIサーバー** として動作する。
+
+#### 23.10.1 VLLMServerManager クラス
+
+```python
+class VLLMServerManager:
+    """Manages vLLM inference server lifecycle on SLURM compute nodes."""
+
+    def __init__(
+        self,
+        distributed_config: DistributedSlurmConfig,
+        model_spec: ModelSpecModel,
+        workspace: Path,
+    ):
+        self._config = distributed_config
+        self._model_spec = model_spec
+        self._workspace = workspace
+        self._server_job: SlurmJobHandle | None = None
+        self._server_url: str | None = None
+
+    async def start(self) -> str:
+        """Submit vLLM server as SLURM job and return the API base URL."""
+        ...
+
+    async def stop(self) -> None:
+        """Gracefully stop the vLLM server (scancel the SLURM job)."""
+        ...
+
+    async def health_check(self) -> bool:
+        """Check if the vLLM server is responsive (GET /health)."""
+        ...
+
+    @property
+    def api_base_url(self) -> str | None:
+        """Return the OpenAI-compatible API base URL, or None if not running."""
+        return self._server_url
+```
+
+#### 23.10.2 persistent vs transient モード
+
+| モード | 起動タイミング | 停止タイミング | ユースケース |
+|--------|---------------|---------------|-------------|
+| **persistent** | 研究開始時（`SearchManager.run()` 冒頭） | 研究終了時（`finally` 句） | 長時間研究、頻繁なLLM呼び出し |
+| **transient** | Phase Aバッチ生成前 | Phase A完了後 | 排他ノード利用、リソース節約 |
+
+**persistent モードのフロー**：
+
+```text
+SearchManager.run() (分散モード)
+  │
+  ├─ 1. vllm_manager.start()
+  │     ├─ sbatch: vLLMサーバージョブ投入（inference stage設定）
+  │     ├─ srun内: vllm serve <model> --host 0.0.0.0 --port 8000
+  │     ├─ ジョブ開始待ち → ノード名取得 → URL構築
+  │     └─ health_check() でサーバー応答確認
+  │
+  ├─ 2. AgentLLM に API base URL をセット
+  │     agent_llm.set_remote_endpoint(vllm_manager.api_base_url)
+  │     → 以降の generate() は OpenAI互換クライアント経由
+  │
+  ├─ 3. 探索ループ（Phase A → B → C の繰り返し）
+  │     ・Phase A: AgentLLM → HTTP → vLLMサーバー（計算ノード）
+  │     ・Phase B: SlurmExecutor で実験投入（別の計算ノード）
+  │     ・Phase C: PPOは RemotePPOExecutor 経由（§23.11）
+  │
+  └─ 4. finally: vllm_manager.stop()
+        └─ scancel でvLLMサーバージョブを停止
+```
+
+**transient モードのフロー**：
+
+```text
+SearchManager._run_distributed_pipeline() — 各バッチ
+  │
+  ├─ Phase A:
+  │   ├─ vllm_manager.start()     ← バッチごとに起動
+  │   ├─ バッチ仮説生成 (AgentLLM → HTTP → vLLM)
+  │   └─ vllm_manager.stop()      ← 生成完了で停止
+  │
+  ├─ Phase B: 実験実行（vLLMサーバー不要）
+  │
+  └─ Phase C: PPO学習（RemotePPOExecutor）
+```
+
+#### 23.10.3 vLLMサーバー起動スクリプト
+
+`VLLMServerManager.start()` が生成するSLURMジョブスクリプト：
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=sera-vllm-server
+#SBATCH --partition={inference.partition}
+#SBATCH --nodes={inference.nodes}
+#SBATCH --gpus-per-node={inference.gpu_count}
+#SBATCH --mem={inference.memory_gb}G
+#SBATCH --time={inference.time_limit}
+#SBATCH --output={workspace}/logs/vllm_server_%j.log
+{exclusive_flag}
+{nodelist_flag}
+
+# 環境モジュールロード
+{module_load_commands}
+
+# vLLMサーバー起動（OpenAI互換API）
+python -m vllm.entrypoints.openai.api_server \
+    --model {model_id} \
+    --dtype {dtype} \
+    --max-model-len {max_seq_len} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-lora \
+    --max-lora-rank {max_lora_rank} \
+    --host 0.0.0.0 \
+    --port 8000
+
+# サーバー起動後、ノード名とポートをファイルに書き出す
+echo "{hostname}:8000" > {workspace}/logs/vllm_server_address.txt
+```
+
+**URLの解決手順**：
+
+1. ジョブ投入後、`squeue -j <job_id> -o "%N"` でノード名を取得
+2. `http://{nodename}:8000/v1` をAPIベースURLとして構築
+3. `GET /health` でサーバー応答を確認（最大30回リトライ、5秒間隔）
+4. タイムアウト（150秒）内に応答がない場合は `scancel` + エラー
+
+#### 23.10.4 AgentLLM のリモートモード
+
+`distributed.enabled=True` の場合、`AgentLLM` はローカルvLLMエンジンの代わりに OpenAI互換クライアントを使用する：
+
+```text
+AgentLLM.generate() — 分散モード
+  │
+  ├─ provider == "local" AND distributed.enabled == True:
+  │   └─ OpenAI 互換クライアント経由
+  │       import openai
+  │       client = openai.AsyncOpenAI(base_url=vllm_server_url)
+  │       response = await client.chat.completions.create(
+  │           model=model_id,
+  │           messages=[{"role": "user", "content": prompt}],
+  │           temperature=temperature,
+  │           max_tokens=max_tokens,
+  │       )
+  │       ※ LoRA指定時は extra_body={"lora_request": {...}} を追加
+  │
+  └─ provider == "local" AND distributed.enabled == False:
+      └─ 既存パス: VLLMInferenceEngine（インプロセス）
+```
+
+`set_remote_endpoint(url)` メソッドにより動的にエンドポイントを設定できる。`agent_llm.provider` は変更せず、内部でルーティングを分岐する。
+
+### 23.11 リモートPPO実行
+
+#### 23.11.1 課題
+
+§23.3.4 のsleep/wakeプロトコルはヘッドノード上のインプロセスvLLMとPPOの協調を前提としている。分散モードではvLLMとPPOが別ノードで動作するため、sleep/wakeは不要だが、PPO学習自体をSLURMジョブとして投入する仕組みが必要。
+
+#### 23.11.2 RemotePPOExecutor クラス
+
+```python
+class RemotePPOExecutor:
+    """Executes PPO training as a SLURM job on a compute node."""
+
+    def __init__(
+        self,
+        distributed_config: DistributedSlurmConfig,
+        exec_spec: ExecutionSpecModel,
+        model_spec: ModelSpecModel,
+        workspace: Path,
+    ):
+        self._config = distributed_config
+        self._exec_spec = exec_spec
+        self._model_spec = model_spec
+        self._workspace = workspace
+
+    async def run_ppo_update(
+        self,
+        rollouts_path: Path,
+        adapter_parent_id: str,
+    ) -> PPOUpdateResult:
+        """Submit PPO training as SLURM job and return results.
+
+        Args:
+            rollouts_path: Path to serialized PPORollout data (JSON).
+            adapter_parent_id: Parent adapter node ID in the lineage tree.
+
+        Returns:
+            PPOUpdateResult with new adapter delta path and training metrics.
+        """
+        ...
+```
+
+#### 23.11.3 PPOジョブの投入・結果回収フロー
+
+```text
+RemotePPOExecutor.run_ppo_update(rollouts_path, adapter_parent_id)
+  │
+  ├─ 1. ロールアウトデータの準備
+  │     rollouts_path に PPORollout をJSON/safetensors でシリアライズ済み
+  │     共有ファイルシステム経由で計算ノードからアクセス可能
+  │
+  ├─ 2. PPOジョブスクリプト生成
+  │     sera_ppo_worker.py を生成（引数: rollouts_path, adapter_parent_id, output_dir）
+  │     training stage の StageNodeConfig で sbatch パラメータを設定
+  │
+  ├─ 3. sbatch でジョブ投入
+  │     submitit.submit(sera_ppo_worker, ...)
+  │     → 計算ノードで PPOTrainer._ppo_update_core() を実行
+  │     → 結果を output_dir/ppo_result.json + adapter_delta.safetensors に書き出す
+  │
+  ├─ 4. ジョブ完了待ち（ポーリング）
+  │     SlurmExecutor.wait_all() と同じポーリングメカニズム
+  │
+  └─ 5. 結果回収
+        output_dir/ppo_result.json を読み込み → PPOUpdateResult として返却
+        adapter_delta.safetensors → LineageManager に登録
+```
+
+**`PPOUpdateResult`** データクラス：
+
+```python
+@dataclass
+class PPOUpdateResult:
+    success: bool
+    adapter_node_id: str             # 新規作成されたアダプタノードID
+    adapter_delta_path: Path         # lineage/nodes/<id>/adapter_delta.safetensors
+    metrics: dict[str, float]        # {"mean_reward": ..., "policy_loss": ..., "value_loss": ..., "kl_divergence": ...}
+    wall_time_sec: float
+```
+
+#### 23.11.4 分散モードでの sleep/wake 不要性
+
+| アーキテクチャ | vLLM | PPO | GPUメモリ協調 |
+|---------------|------|-----|--------------|
+| §23.1（ヘッドノード） | インプロセス（同一GPU） | インプロセス（同一GPU） | **sleep/wake必須** |
+| §23.9（分散） | 計算ノードA（専用GPU） | 計算ノードB（専用GPU） | **不要**（別ノード） |
+
+分散モードでは `PPOTrainer` の sleep/wake 呼び出しをスキップする。`research_cmd.py` で分散モード判定後、`PPOTrainer` の代わりに `RemotePPOExecutor` を使用する。
+
+### 23.12 排他モード（Exclusive Node Allocation）
+
+#### 23.12.1 目的
+
+ベンチマーク実験やリソース集約型の処理では、計算ノードを排他的に確保して他ジョブの干渉を排除する必要がある。`StageNodeConfig.exclusive = True` により `--exclusive` フラグをsbatchに渡す。
+
+#### 23.12.2 SlurmExecutor の --exclusive 対応
+
+`StageNodeConfig.exclusive == True` の場合、submitit パラメータに `--exclusive` を追加する：
+
+```python
+def _build_stage_params(self, stage_config: StageNodeConfig) -> dict:
+    """Build submitit parameters from StageNodeConfig."""
+    params = {
+        "slurm_partition": stage_config.partition,
+        "slurm_gpus_per_node": stage_config.gpu_count,
+        "slurm_mem": f"{stage_config.memory_gb}G",
+        "slurm_cpus_per_task": stage_config.cpu_cores,
+        "slurm_time": stage_config.time_limit,
+    }
+    if stage_config.exclusive:
+        params["slurm_additional_parameters"] = {
+            **params.get("slurm_additional_parameters", {}),
+            "exclusive": "",  # --exclusive (no value)
+        }
+    if stage_config.nodelist:
+        params.setdefault("slurm_additional_parameters", {})
+        params["slurm_additional_parameters"]["nodelist"] = stage_config.nodelist
+    # stage固有の sbatch_extra を追加
+    for directive in stage_config.sbatch_extra:
+        # 既存の _parse_sbatch_extra() ロジックを再利用
+        ...
+    return params
+```
+
+#### 23.12.3 ベンチマーク向けユースケース
+
+| 設定パターン | 説明 | 排他モード |
+|-------------|------|-----------|
+| **ベンチマーク実験** | 全実験を同一ハードウェアで再現可能に実行 | `experiment.exclusive=True` |
+| **大規模モデル推論** | vLLM推論でGPUメモリを最大限活用 | `inference.exclusive=True` |
+| **PPO集約学習** | PPO更新の高速化のためGPU/CPUを独占 | `training.exclusive=True` |
+| **完全排他ベンチマーク** | 全ステージを排他ノードで実行 | 全ステージ `exclusive=True` |
+
+**排他モードと `vllm_mode` の連動**：
+
+`inference.nodes=1` かつ `inference.exclusive=True` かつ `vllm_mode` 未指定の場合、`vllm_mode` は自動的に `"transient"` に設定される。理由：排他ノード1台をvLLMサーバーに専有させ続けるのはリソースの無駄であるため、推論が必要な期間のみ起動する。ユーザが明示的に `vllm_mode: persistent` を指定した場合はこの自動設定を上書きする。
+
+### 23.13 分散パイプラインフロー
+
+#### 23.13.1 SearchManager._run_distributed_pipeline() の全体フロー
+
+```python
+async def _run_distributed_pipeline(self) -> SearchNode | None:
+    """Distributed SLURM pipeline: all GPU work on compute nodes."""
+    dist_config = self.specs.resource.compute.distributed
+    vllm_manager = VLLMServerManager(dist_config, self.specs.model, self._workspace)
+    ppo_executor = RemotePPOExecutor(dist_config, self.specs.execution, self.specs.model, self._workspace)
+
+    try:
+        # persistent モード: 研究開始時にvLLMサーバーを起動
+        if dist_config.vllm_mode == "persistent":
+            api_url = await vllm_manager.start()
+            self._agent_llm.set_remote_endpoint(api_url)
+
+        while not self._should_terminate():
+            # --- Phase A: バッチ生成 (計算ノード: vLLM推論) ---
+            if dist_config.vllm_mode == "transient":
+                api_url = await vllm_manager.start()
+                self._agent_llm.set_remote_endpoint(api_url)
+
+            submit_queue = await self._batch_generate(batch_size)
+
+            if dist_config.vllm_mode == "transient":
+                await vllm_manager.stop()
+
+            if not submit_queue:
+                break
+
+            # --- Phase B: バッチ実験実行 (計算ノード: 実験) ---
+            handles = [
+                self._executor.submit_async(n.node_id, n.script_path, seed)
+                for n, seed in submit_queue
+            ]
+            results = self._executor.wait_all(handles, timeout_sec=...)
+
+            # --- Phase C: バッチ評価 + PPO学習 (計算ノード: PPO) ---
+            await self._batch_evaluate(results)
+
+            if self._should_run_ppo():
+                ppo_result = await ppo_executor.run_ppo_update(
+                    rollouts_path=self._serialize_rollouts(),
+                    adapter_parent_id=self._current_adapter_id,
+                )
+                self._lineage_manager.register_delta(ppo_result)
+
+            self._checkpoint_if_needed()
+
+    finally:
+        await vllm_manager.stop()  # persistent モード: 研究終了時にvLLMサーバーを停止
+```
+
+#### 23.13.2 3フェーズの時系列とノード使用状況
+
+```text
+時間 →
+
+Phase A ████░░░░░░░░░░░░░████░░░░░░░░░░░░░████  (計算ノード: vLLM推論)
+Phase B ░░░░████████████░░░░░████████████░░░░░░  (計算ノード: 実験実行)
+Phase C ░░░░░░░░░░░░░████░░░░░░░░░░░░░████░░░░  (計算ノード: PPO学習)
+
+ログイン ────────────────────────────────────────  (オーケストレーション: CPU only)
+ノード   ポーリング・調整・チェックポイント保存
+
+█ = GPU使用, ░ = 待機/未使用, ─ = CPU処理のみ
+```
+
+**§23.7 との差分**：§23.7 ではヘッドノードのGPUを Phase A と Phase C で共有していたが、分散モードでは各フェーズが **異なる計算ノード** で実行される。sleep/wake プロトコルは不要になり、代わりにSLURMジョブの投入・完了待ちで制御する。
+
+#### 23.13.3 フェーズ間のデータフロー
+
+```text
+Phase A (vLLM推論ノード)
+  │  生成物: experiment.py (runs/{node_id}/)
+  │  経路: 共有ファイルシステム
+  ▼
+Phase B (実験実行ノード)
+  │  入力: experiment.py
+  │  出力: metrics.json, stdout.log, stderr.log
+  │  経路: 共有ファイルシステム
+  ▼
+Phase C (PPO学習ノード)
+  │  入力: rollouts (JSON), 親アダプタデルタ (safetensors)
+  │  出力: 新アダプタデルタ (safetensors), ppo_result.json
+  │  経路: 共有ファイルシステム
+  ▼
+ログインノード (オーケストレーター)
+     入力: metrics.json, ppo_result.json
+     処理: 統計計算, 探索木更新, チェックポイント保存
+```
+
+**前提条件**: すべてのノードが同一の共有ファイルシステム（NFS, Lustre, GPFS等）上の `sera_workspace/` にアクセス可能であること。これはHPCクラスタの標準的な構成である。
+
+### 23.14 CLI/Wizard設定項目
+
+#### 23.14.1 freeze-specs の追加オプション
+
+`sera freeze-specs` コマンドに分散SLURM関連のオプションを追加する：
+
+```python
+@app.command()
+def freeze_specs(
+    # ... 既存オプション ...
+    # 分散SLURMオプション
+    distributed: Annotated[bool, typer.Option("--distributed")] = False,
+    inference_gpu_count: Annotated[int, typer.Option("--inference-gpu-count")] = 1,
+    inference_partition: Annotated[str, typer.Option("--inference-partition")] = "",
+    inference_nodelist: Annotated[str, typer.Option("--inference-nodelist")] = "",
+    training_gpu_count: Annotated[int, typer.Option("--training-gpu-count")] = 1,
+    training_partition: Annotated[str, typer.Option("--training-partition")] = "",
+    experiment_exclusive: Annotated[bool, typer.Option("--experiment-exclusive")] = False,
+    vllm_mode: Annotated[str, typer.Option("--vllm-mode")] = "persistent",
+):
+```
+
+| オプション | 型 | デフォルト | 説明 |
+|-----------|-----|-----------|------|
+| `--distributed` | `bool` | `False` | 分散SLURMモードを有効化 |
+| `--inference-gpu-count` | `int` | `1` | vLLM推論ノードのGPU数 |
+| `--inference-partition` | `str` | `""` | vLLM推論ノードのパーティション（空=共通partition使用） |
+| `--inference-nodelist` | `str` | `""` | vLLM推論ノードのノードリスト |
+| `--training-gpu-count` | `int` | `1` | PPO学習ノードのGPU数 |
+| `--training-partition` | `str` | `""` | PPO学習ノードのパーティション |
+| `--experiment-exclusive` | `bool` | `False` | 実験ノードを排他割り当て |
+| `--vllm-mode` | `str` | `"persistent"` | vLLMサーバーライフサイクル |
+
+**既存オプションとの関係**: `--gpu-count`, `--gpu-type`, `--memory-gb` 等の既存オプションは実験ステージのデフォルト値として使用される。`--distributed` が `True` の場合、ステージ固有のオプションが優先される。
+
+#### 23.14.2 Wizard Step 10c-slurm: SLURMノード設定
+
+`sera setup` の Step 10c（ResourceSpec）に分散SLURM設定のサブステップを追加する。SLURM環境が検出された場合（`env.slurm_available == True`）にのみ表示される。
+
+**対話フロー**：
+
+```text
+  [3/5] ResourceSpec — SLURM設定:
+
+  SLURM環境を検出しました:
+    パーティション: gpu, gpu-large, cpu
+    デフォルトアカウント: my_project
+
+  分散SLURMモードを使用しますか？
+  （すべてのGPU処理を計算ノードで実行します）
+    [1] はい（推奨: ログインノードにGPUがない環境）
+    [2] いいえ（ヘッドノードでvLLM/PPOを実行）
+  > 1
+
+  ── vLLM推論ノード設定 ──
+  パーティション [gpu-large]: >
+  GPU数 [1]: > 4
+  GPU種別 [A100]: >
+  メモリ (GB) [256]: >
+  時間制限 [12:00:00]: >
+  ノードリスト (空=自動割り当て): >
+
+  ── 実験実行ノード設定 ──
+  パーティション [gpu]: >
+  GPU数 [1]: >
+  排他モード (ベンチマーク用) [N]: > y
+
+  ── PPO学習ノード設定 ──
+  パーティション [gpu-large]: >
+  GPU数 [2]: >
+  時間制限 [04:00:00]: >
+
+  vLLMサーバーモード:
+    [1] persistent — 研究中ずっと起動（推奨）
+    [2] transient  — バッチごとに起動・停止
+  > 1
+
+  ┌──────────────────────────────────────────────────────┐
+  │ distributed:                                          │
+  │   enabled: true                                       │
+  │   inference: {partition: gpu-large, gpu: 4×A100}      │
+  │   experiment: {partition: gpu, exclusive: true}        │
+  │   training: {partition: gpu-large, gpu: 2×A100}       │
+  │   vllm_mode: persistent                               │
+  └──────────────────────────────────────────────────────┘
+  この設定でよろしいですか？ [Y/n/edit] >
+```
+
+**wizard_state への保存**：
+
+```python
+# wizard_state["phase1_params"] に追加されるキー
+{
+    "distributed_enabled": True,
+    "distributed_inference_partition": "gpu-large",
+    "distributed_inference_gpu_count": 4,
+    "distributed_inference_gpu_type": "A100",
+    "distributed_inference_memory_gb": 256,
+    "distributed_inference_time_limit": "12:00:00",
+    "distributed_inference_nodelist": "",
+    "distributed_experiment_partition": "gpu",
+    "distributed_experiment_exclusive": True,
+    "distributed_training_partition": "gpu-large",
+    "distributed_training_gpu_count": 2,
+    "distributed_training_time_limit": "04:00:00",
+    "distributed_vllm_mode": "persistent",
+}
+```
+
+これらは `step11_freeze.py` で `cli_args` に展開され、`phase1_cmd.run_freeze_specs()` → `SpecBuilder` → `resource_spec.yaml` に反映される。
+
+#### 23.14.3 ファイルリファレンス（§23.9–§23.14 追加分）
+
+| ファイル | 主要クラス/関数 | 役割 |
+|---------|---------------|------|
+| `src/sera/specs/resource_spec.py` | `StageNodeConfig`, `DistributedSlurmConfig` | 分散SLURMスキーマ |
+| `src/sera/execution/vllm_server_manager.py` | `VLLMServerManager` | vLLMリモートサーバー管理 |
+| `src/sera/execution/remote_ppo_executor.py` | `RemotePPOExecutor`, `PPOUpdateResult` | リモートPPO実行 |
+| `src/sera/search/search_manager.py` | `SearchManager._run_distributed_pipeline()` | 分散パイプライン制御 |
+| `src/sera/agent/agent_llm.py` | `AgentLLM.set_remote_endpoint()` | リモートvLLMエンドポイント切替 |
+| `src/sera/commands/phase1_cmd.py` | `freeze_specs()` 追加オプション | CLI分散SLURMオプション |
+| `src/sera/commands/wizard/steps/step10_specs.py` | Step 10c-slurm | Wizard SLURM設定 |
 
 ---

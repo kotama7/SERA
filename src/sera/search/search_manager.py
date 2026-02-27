@@ -818,28 +818,18 @@ class SearchManager:
         except ImportError:
             return False
 
-    async def _run_batched_pipeline(
-        self,
-        batch_size: int,
-        max_concurrent: int,
-        poll_interval_sec: float,
-    ) -> None:
-        """Submit multiple pending nodes in batch via SLURM, evaluate results, and feed PPO buffer.
+    async def _batch_generate(self, batch_size: int, max_concurrent: int) -> list[SearchNode]:
+        """Phase A of SLURM batch pipeline: collect pending nodes and generate experiment scripts.
 
-        Collects up to ``batch_size`` pending nodes from the open list, submits them
-        in a single batch via the executor's ``run_batch()`` method, evaluates the
-        results, and processes PPO updates.
+        Pops up to ``min(batch_size, max_concurrent)`` pending nodes from the
+        open list and generates experiment code for each via the evaluator's
+        experiment generator.
 
-        Parameters
-        ----------
-        batch_size : int
-            Maximum number of nodes to submit per batch.
-        max_concurrent : int
-            Maximum number of concurrent SLURM jobs (caps batch collection).
-        poll_interval_sec : float
-            Polling interval for SLURM job status (passed to executor).
+        Returns
+        -------
+        list[SearchNode]
+            Nodes with generated experiment scripts, ready for SLURM submission.
         """
-        # Collect pending nodes from the open list up to min(batch_size, max_concurrent)
         effective_batch = min(batch_size, max_concurrent)
         batch_nodes: list[SearchNode] = []
 
@@ -849,64 +839,139 @@ class SearchManager:
                 continue
             node = self.all_nodes[node_id]
             if node.status != "pending":
-                # Put non-pending nodes back for single-node processing
                 heapq.heappush(self.open_list, (neg_priority, node_id))
                 break
             self.closed_set.add(node_id)
             batch_nodes.append(node)
 
         if not batch_nodes:
-            return
+            return []
 
-        logger.info("SLURM batch pipeline: submitting %d nodes", len(batch_nodes))
+        # Generate experiment scripts for each node
+        experiment_generator = getattr(self.evaluator, "experiment_generator", None)
+        if experiment_generator is not None:
+            for node in batch_nodes:
+                try:
+                    generated = await experiment_generator.generate(node)
+                    node._generated_entry_point = generated.entry_point
+                except Exception as e:
+                    logger.error("Experiment generation failed for node %s: %s", node.node_id[:8], e)
+                    node.mark_failed(f"Experiment generation failed: {e}")
+                    self.closed_set.discard(node.node_id)
 
-        # Build task dicts for run_batch
+        # Filter out nodes that failed generation
+        batch_nodes = [n for n in batch_nodes if n.status != "failed"]
+        return batch_nodes
+
+    async def _batch_submit_and_wait(self, batch_nodes: list[SearchNode]) -> list[Any]:
+        """Phase B of SLURM batch pipeline: submit SLURM jobs and wait for all to complete.
+
+        Parameters
+        ----------
+        batch_nodes : list[SearchNode]
+            Nodes with generated experiment scripts.
+
+        Returns
+        -------
+        list[RunResult]
+            One RunResult per node, in the same order as ``batch_nodes``.
+        """
+        import hashlib
+
         exec_spec = self.specs.execution
-        timeout_sec = getattr(getattr(exec_spec, "search", None), "timeout_sec", None)
+        timeout_sec = getattr(
+            getattr(exec_spec, "evaluation", None), "timeout_per_run_sec", 600
+        )
         work_dir = self.executor.work_dir if hasattr(self.executor, "work_dir") else self.checkpoint_dir.parent
+        base_seed = getattr(self.evaluator, "base_seed", 42)
 
         tasks = []
         for node in batch_nodes:
             node.status = "running"
             run_dir = Path(work_dir) / "runs" / node.node_id
-            script_path = run_dir / "experiment.py"
+            entry_point = getattr(node, "_generated_entry_point", "experiment.py")
+            script_path = run_dir / entry_point
+            # Derive seed: SHA-256(base_seed:node_id:0) % 2^31
+            seed_hash = hashlib.sha256(f"{base_seed}:{node.node_id}:0".encode()).hexdigest()
+            seed = int(seed_hash, 16) % (2**31)
             tasks.append({
                 "node_id": node.node_id,
                 "script_path": script_path,
-                "seed": 0,  # Seed will be derived by executor or evaluator
+                "seed": seed,
                 "timeout_sec": timeout_sec,
             })
 
-        # Submit batch and collect results
+        # Track handles for SIGINT cleanup
+        self._pending_slurm_handles = tasks
+
         try:
             results = await self.executor.run_batch(tasks)
-        except Exception as e:
-            logger.error("SLURM batch submission failed: %s", e)
-            for node in batch_nodes:
-                node.mark_failed(f"Batch submission failed: {e}")
-                self.closed_set.discard(node.node_id)
-            return
+        finally:
+            self._pending_slurm_handles = []
 
-        # Process each result
+        return results
+
+    async def _batch_evaluate_and_learn(
+        self, batch_nodes: list[SearchNode], results: list[Any]
+    ) -> None:
+        """Phase C of SLURM batch pipeline: parse metrics, update stats, and feed PPO buffer.
+
+        Parameters
+        ----------
+        batch_nodes : list[SearchNode]
+            The nodes that were submitted.
+        results : list[RunResult]
+            RunResults from SLURM, one per node.
+        """
+        import json as _json
+
+        exec_spec = self.specs.execution
+        metric_name = getattr(
+            getattr(self.specs, "problem", None),
+            "objective",
+            None,
+        )
+        metric_name = getattr(metric_name, "metric_name", "score") if metric_name else "score"
+
         for node, result in zip(batch_nodes, results):
             self.step += 1
             try:
+                node.wall_time_sec += result.wall_time_sec
+
                 if not result.success:
+                    stderr_content = ""
+                    if result.stderr_path and result.stderr_path.exists():
+                        stderr_content = result.stderr_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )[:2000]
                     if result.exit_code == -7:
                         node.status = "oom"
+                        node.error_message = f"Out of memory: {stderr_content}"
                     elif result.exit_code == -9:
                         node.status = "timeout"
+                        node.error_message = f"Timeout: {stderr_content}"
                     else:
-                        node.mark_failed(f"exit_code={result.exit_code}")
+                        node.mark_failed(f"exit_code={result.exit_code}: {stderr_content}")
                     self.closed_set.discard(node.node_id)
                     continue
 
-                # Run evaluator on the successful result
-                await self.evaluator.evaluate_initial(node)
+                # Parse metrics from result
+                if result.metrics_path and result.metrics_path.exists():
+                    try:
+                        metrics = _json.loads(result.metrics_path.read_text(encoding="utf-8"))
+                        node.add_metric(metrics)
+                    except (_json.JSONDecodeError, OSError) as e:
+                        logger.warning("Metrics read error for node %s: %s", node.node_id[:8], e)
+                        node.mark_failed(f"Metrics read error: {e}")
+                        self.closed_set.discard(node.node_id)
+                        continue
 
-                if node.status in ("failed", "oom"):
-                    self.closed_set.discard(node.node_id)
-                    continue
+                # Run evaluator stats update (for remaining repeats if top-k)
+                from sera.evaluation.feasibility import check_feasibility
+                from sera.evaluation.statistical_evaluator import update_stats
+
+                update_stats(node, metric_name)
+                node.feasible = check_feasibility(node, getattr(self.specs, "problem", None))
 
                 k = getattr(getattr(exec_spec, "evaluation", None), "sequential_eval_topk", 5)
                 if self._is_topk(node, k):
@@ -957,6 +1022,42 @@ class SearchManager:
             sum(1 for n in batch_nodes if n.status == "evaluated"),
             len(batch_nodes),
         )
+
+    async def _run_batched_pipeline(
+        self,
+        batch_size: int,
+        max_concurrent: int,
+        poll_interval_sec: float,
+    ) -> None:
+        """Three-phase SLURM async batch pipeline (§23.7).
+
+        Phase A: Generate experiment scripts for pending nodes.
+        Phase B: Submit SLURM jobs and wait for completion.
+        Phase C: Parse metrics, update stats, and feed PPO buffer.
+
+        Parameters
+        ----------
+        batch_size : int
+            Maximum number of nodes to submit per batch.
+        max_concurrent : int
+            Maximum number of concurrent SLURM jobs.
+        poll_interval_sec : float
+            Polling interval for SLURM job status.
+        """
+        # Phase A: Generate
+        batch_nodes = await self._batch_generate(batch_size, max_concurrent)
+        if not batch_nodes:
+            return
+
+        logger.info("SLURM batch pipeline Phase A: %d nodes generated", len(batch_nodes))
+
+        # Phase B: Submit and wait
+        results = await self._batch_submit_and_wait(batch_nodes)
+
+        logger.info("SLURM batch pipeline Phase B: %d results collected", len(results))
+
+        # Phase C: Evaluate and learn
+        await self._batch_evaluate_and_learn(batch_nodes, results)
 
     def _add_node(self, node: SearchNode) -> None:
         """Add a node to the search tree and open list."""

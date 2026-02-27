@@ -37,6 +37,17 @@ class ToolPolicy:
     # Shell command whitelist
     allowed_shell_commands: list[str] = field(default_factory=lambda: ["pip", "python", "ls", "cat", "wc"])
 
+    # Build tool commands (§7.3.2.7) — allowed only when compiled=True
+    allowed_build_commands: list[str] = field(
+        default_factory=lambda: [
+            "g++", "gcc", "clang++", "clang",  # C/C++ compilers
+            "cargo", "rustc",                    # Rust
+            "go",                                # Go
+            "make", "cmake",                     # Build systems
+        ]
+    )
+    compiled_language: bool = False  # Set True to enable build commands
+
     # Rate limiting for external API calls
     api_rate_limit_per_minute: int = 30
     api_rate_limit_burst: int = 5
@@ -82,6 +93,21 @@ class ToolPolicy:
                 kwargs["allow_api_calls"] = getattr(network_cfg, "allow_api_calls", True)
 
         return cls(**kwargs)
+
+    @classmethod
+    def from_specs_with_problem(
+        cls,
+        plan_spec: Any = None,
+        resource_spec: Any = None,
+        problem_spec: Any = None,
+    ) -> "ToolPolicy":
+        """Create a ToolPolicy from spec objects, including language config."""
+        policy = cls.from_specs(plan_spec, resource_spec)
+        if problem_spec is not None:
+            lang = getattr(problem_spec, "language", None)
+            if lang is not None:
+                policy.compiled_language = getattr(lang, "compiled", False)
+        return policy
 
     def check_tool_allowed(self, tool_name: str, phase: str | None = None) -> tuple[bool, str]:
         """Check whether *tool_name* is allowed in the given *phase*.
@@ -138,11 +164,17 @@ class ToolPolicy:
         return False, f"Write not allowed: {relative_path} not in {self.allowed_write_dirs}"
 
     def check_shell_command(self, command: str) -> tuple[bool, str]:
-        """Check whether the shell command is in the whitelist."""
+        """Check whether the shell command is in the whitelist.
+
+        Build tool commands (g++, cargo, etc.) are allowed only when
+        ``compiled_language`` is True (§7.3.2.7).
+        """
         executable = command.strip().split()[0] if command.strip() else ""
-        if executable not in self.allowed_shell_commands:
-            return False, f"Shell command {executable!r} not in whitelist"
-        return True, ""
+        if executable in self.allowed_shell_commands:
+            return True, ""
+        if self.compiled_language and executable in self.allowed_build_commands:
+            return True, ""
+        return False, f"Shell command {executable!r} not in whitelist"
 
     def check_api_rate_limit(self) -> tuple[bool, str]:
         """Check whether an external API call is within rate limits."""

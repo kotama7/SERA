@@ -53,6 +53,8 @@ class RunResult:
     artifacts_dir: Path
     wall_time_sec: float
     seed: int
+    build_time_sec: float | None = None
+    build_exit_code: int | None = None
 
 
 class Executor(ABC):

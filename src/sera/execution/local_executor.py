@@ -38,6 +38,8 @@ class LocalExecutor(Executor):
     seed_arg_format : str | None
         Format string for seed argument (e.g. ``"--seed {seed}"``).
         If None, defaults to ``"--seed {seed}"``.
+    language_config : object | None
+        LanguageConfig for compiled language / dependency support.
     """
 
     def __init__(
@@ -47,12 +49,160 @@ class LocalExecutor(Executor):
         interpreter_command: str | None = None,
         seed_arg_format: str | None = None,
         allow_internet: bool = True,
+        language_config: object | None = None,
     ):
         self.work_dir = Path(work_dir)
         self.python_executable = python_executable
         self.interpreter_command = interpreter_command
         self.seed_arg_format = seed_arg_format
         self.allow_internet = allow_internet
+        self.language_config = language_config
+
+    # ------------------------------------------------------------------
+    # Compiled language support (§7.3.2) and dependency management (§7.3.3)
+    # ------------------------------------------------------------------
+
+    def _install_dependencies(self, run_dir: Path) -> tuple[bool, int, float]:
+        """Install dependencies before compilation/execution (§7.3.3).
+
+        Returns (success, exit_code, elapsed_sec).
+        """
+        lang = self.language_config
+        if lang is None:
+            return True, 0, 0.0
+        dep = getattr(lang, "dependency", None)
+        if dep is None:
+            return True, 0, 0.0
+
+        start = time.monotonic()
+
+        # Pre-install commands
+        for cmd in getattr(dep, "pre_install_commands", []):
+            try:
+                subprocess.run(cmd, shell=True, cwd=str(run_dir), timeout=60, check=True)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                logger.warning("Pre-install command failed: %s — %s", cmd, exc)
+                return False, 1, time.monotonic() - start
+
+        # Determine install command
+        install_cmd = getattr(dep, "install_command", "")
+        if not install_cmd:
+            manager = getattr(dep, "manager", "pip")
+            build_file = getattr(dep, "build_file", "")
+            auto_commands = {
+                "pip": f"pip install -r {build_file}" if build_file else "",
+                "conda": f"conda install --file {build_file} -y" if build_file else "",
+                "cargo": "",  # cargo build resolves deps automatically
+                "cmake": "",
+                "go_mod": "go mod download",
+            }
+            install_cmd = auto_commands.get(manager, "")
+
+        if not install_cmd:
+            elapsed = time.monotonic() - start
+            return True, 0, elapsed
+
+        # Network control
+        proc_env = self._build_subprocess_env() or os.environ.copy()
+        if not self.allow_internet:
+            manager = getattr(dep, "manager", "pip")
+            cache_dir = getattr(dep, "cache_dir", "")
+            if manager == "pip":
+                if cache_dir:
+                    install_cmd += f" --no-index --find-links={cache_dir}"
+                else:
+                    logger.error("Offline mode with pip but no cache_dir set")
+                    return False, 1, time.monotonic() - start
+            elif manager == "cargo":
+                proc_env["CARGO_NET_OFFLINE"] = "true"
+            elif manager == "go_mod":
+                proc_env["GOPROXY"] = "off"
+
+        if getattr(dep, "cache_dir", ""):
+            manager = getattr(dep, "manager", "pip")
+            cache_dir = dep.cache_dir
+            cache_env = {"pip": "PIP_CACHE_DIR", "cargo": "CARGO_HOME", "go_mod": "GOPATH"}
+            env_var = cache_env.get(manager)
+            if env_var:
+                proc_env[env_var] = cache_dir
+
+        install_timeout = getattr(dep, "install_timeout_sec", 300)
+        install_stdout = run_dir / "install_stdout.log"
+        install_stderr = run_dir / "install_stderr.log"
+
+        try:
+            with open(install_stdout, "w") as out_f, open(install_stderr, "w") as err_f:
+                result = subprocess.run(
+                    install_cmd,
+                    shell=True,
+                    cwd=str(run_dir),
+                    stdout=out_f,
+                    stderr=err_f,
+                    timeout=install_timeout,
+                    env=proc_env,
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning("Dependency install timed out after %ds", install_timeout)
+            return False, -9, time.monotonic() - start
+
+        # Post-install commands
+        if result.returncode == 0:
+            for cmd in getattr(dep, "post_install_commands", []):
+                try:
+                    subprocess.run(cmd, shell=True, cwd=str(run_dir), timeout=60, check=True)
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                    logger.warning("Post-install command failed: %s — %s", cmd, exc)
+                    return False, 1, time.monotonic() - start
+
+        elapsed = time.monotonic() - start
+        return result.returncode == 0, result.returncode, elapsed
+
+    def _run_build_step(self, run_dir: Path, script_path: Path) -> tuple[bool, int, float]:
+        """Compile experiment code for compiled languages (§7.3.2).
+
+        Returns (success, exit_code, elapsed_sec).
+        """
+        lang = self.language_config
+        if lang is None or not getattr(lang, "compiled", False):
+            return True, 0, 0.0
+
+        compile_command = getattr(lang, "compile_command", "")
+        if not compile_command:
+            return True, 0, 0.0
+
+        compile_flags = getattr(lang, "compile_flags", [])
+        link_flags = getattr(lang, "link_flags", [])
+        binary_name = getattr(lang, "binary_name", "experiment")
+        build_timeout = getattr(lang, "build_timeout_sec", 120)
+
+        # Determine if shell mode is needed (multi-word compile_command like "cargo build --release")
+        use_shell = " " in compile_command
+
+        if use_shell:
+            cmd = compile_command
+        else:
+            cmd = [compile_command] + compile_flags + [str(script_path)] + link_flags + ["-o", binary_name]
+
+        build_stdout = run_dir / "build_stdout.log"
+        build_stderr = run_dir / "build_stderr.log"
+        start = time.monotonic()
+
+        try:
+            with open(build_stdout, "w") as out_f, open(build_stderr, "w") as err_f:
+                result = subprocess.run(
+                    cmd,
+                    shell=use_shell,
+                    cwd=str(run_dir),
+                    stdout=out_f,
+                    stderr=err_f,
+                    timeout=build_timeout,
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning("Build timed out after %ds for %s", build_timeout, run_dir)
+            return False, -9, time.monotonic() - start
+
+        elapsed = time.monotonic() - start
+        return result.returncode == 0, result.returncode, elapsed
 
     def _build_subprocess_env(self) -> dict[str, str] | None:
         """Build environment dict for subprocesses.
@@ -111,18 +261,56 @@ class LocalExecutor(Executor):
 
         script_path = Path(script_path)
 
-        # Determine interpreter command
-        interpreter = self.interpreter_command or self.python_executable
+        # Compiled language: install dependencies + build step (§7.3.2, §7.3.3)
+        lang = self.language_config
+        is_compiled = lang is not None and getattr(lang, "compiled", False)
+        build_time_sec: float | None = None
+        build_exit_code: int | None = None
+
+        if is_compiled or (lang and getattr(lang, "dependency", None)):
+            dep_ok, dep_code, dep_time = self._install_dependencies(run_dir)
+            if not dep_ok:
+                return RunResult(
+                    node_id=node_id, success=False, exit_code=dep_code,
+                    stdout_path=stdout_path, stderr_path=stderr_path,
+                    metrics_path=None, artifacts_dir=run_dir,
+                    wall_time_sec=dep_time, seed=seed,
+                    build_time_sec=dep_time, build_exit_code=dep_code,
+                )
+
+        if is_compiled:
+            build_ok, b_code, b_time = self._run_build_step(run_dir, script_path)
+            build_time_sec = b_time
+            build_exit_code = b_code
+            if not build_ok:
+                return RunResult(
+                    node_id=node_id, success=False, exit_code=b_code,
+                    stdout_path=stdout_path, stderr_path=stderr_path,
+                    metrics_path=None, artifacts_dir=run_dir,
+                    wall_time_sec=b_time, seed=seed,
+                    build_time_sec=b_time, build_exit_code=b_code,
+                )
+
+        # Determine interpreter/binary command
+        if is_compiled:
+            binary_name = getattr(lang, "binary_name", "experiment")
+            interpreter = str(run_dir / binary_name)
+        else:
+            interpreter = self.interpreter_command or self.python_executable
 
         # Build command with configurable seed argument format
         seed_fmt = self.seed_arg_format or "--seed {seed}"
         seed_args_str = seed_fmt.format(seed=seed) if seed_fmt else ""
 
         # Detect if interpreter_command contains shell syntax (spaces, &&, |, etc.)
-        use_shell = interpreter and any(c in interpreter for c in (" ", "&&", "|", ";"))
+        use_shell = not is_compiled and interpreter and any(c in interpreter for c in (" ", "&&", "|", ";"))
 
         if use_shell:
             cmd = f"{interpreter} {str(Path(script_path).resolve())} {seed_args_str}".strip()
+        elif is_compiled:
+            cmd = [interpreter]
+            if seed_args_str:
+                cmd.extend(seed_args_str.split())
         else:
             cmd = [interpreter, str(Path(script_path).resolve())]
             if seed_args_str:
@@ -191,7 +379,11 @@ class LocalExecutor(Executor):
                 exit_code = -7
                 logger.warning("OOM detected for node %s", node_id[:8])
 
-        # Check for metrics file
+        # Check for metrics file (cwd is artifacts_dir, so check there first)
+        artifacts_metrics = artifacts_dir / "metrics.json"
+        if artifacts_metrics.exists() and not metrics_path.exists():
+            import shutil
+            shutil.copy2(artifacts_metrics, metrics_path)
         found_metrics = metrics_path if metrics_path.exists() else None
 
         success = exit_code == 0 and not timed_out
@@ -206,6 +398,8 @@ class LocalExecutor(Executor):
             artifacts_dir=run_dir,
             wall_time_sec=wall_time,
             seed=seed,
+            build_time_sec=build_time_sec,
+            build_exit_code=build_exit_code,
         )
 
         logger.info(
@@ -422,6 +616,10 @@ class LocalExecutor(Executor):
                 exit_code = -7
                 logger.warning("OOM detected for node %s (stream)", node_id[:8])
 
+        artifacts_metrics_s = artifacts_dir / "metrics.json"
+        if artifacts_metrics_s.exists() and not metrics_path.exists():
+            import shutil
+            shutil.copy2(artifacts_metrics_s, metrics_path)
         found_metrics = metrics_path if metrics_path.exists() else None
         success = exit_code == 0 and not timed_out
 

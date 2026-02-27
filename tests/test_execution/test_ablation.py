@@ -15,6 +15,7 @@ from sera.execution.ablation import (
     _get_baseline_value,
     generate_ablation_configs,
 )
+from sera.execution.experiment_generator import GeneratedExperiment, GeneratedFile
 from sera.execution.executor import RunResult
 from sera.search.search_node import SearchNode
 
@@ -234,7 +235,7 @@ class TestAblationRunner:
         mock_executor = MagicMock()
         mock_generator = AsyncMock()
 
-        # Mock generate to return a script path within workspace
+        # Mock generate to return a GeneratedExperiment
         async def mock_generate(node):
             run_dir = tmp_workspace / "runs" / node.node_id
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +245,10 @@ class TestAblationRunner:
             # Also write metrics.json so executor can find it
             metrics = {"accuracy": 0.85}
             (run_dir / "metrics.json").write_text(json.dumps(metrics))
-            return script
+            return GeneratedExperiment(
+                entry_point="experiment.py",
+                files=[GeneratedFile("experiment.py", "print('test')")],
+            )
 
         mock_generator.generate = mock_generate
         mock_executor.work_dir = str(tmp_workspace)
@@ -280,7 +284,10 @@ class TestAblationRunner:
             run_dir.mkdir(parents=True, exist_ok=True)
             script = run_dir / "experiment.py"
             script.write_text("raise Exception('fail')")
-            return script
+            return GeneratedExperiment(
+                entry_point="experiment.py",
+                files=[GeneratedFile("experiment.py", "raise Exception('fail')")],
+            )
 
         mock_generator.generate = mock_generate
         mock_executor.work_dir = str(tmp_workspace)

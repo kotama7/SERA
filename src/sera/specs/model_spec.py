@@ -123,6 +123,10 @@ class ModelSpecModel(BaseModel):
         description="Base foundation model",
     )
     agent_llm: AgentLLMConfig = Field(default_factory=AgentLLMConfig, description="Agent LLM configuration")
+    paper_llm: AgentLLMConfig | None = Field(
+        None,
+        description="LLM for Phase 7-8 paper generation/evaluation. Falls back to agent_llm if None.",
+    )
     adapter_spec: AdapterSpec = Field(default_factory=AdapterSpec, description="Adapter / LoRA configuration")
     inference: InferenceConfig = Field(default_factory=InferenceConfig, description="Inference engine configuration")
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="Vision-language model (optional)")

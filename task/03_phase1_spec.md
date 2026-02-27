@@ -57,6 +57,13 @@ model_spec:
     dropout: 0.05
     init: "zero"          # "zero" | "gaussian" | "kaiming"。zero推奨（初期状態でベースモデルと同一出力）
     delta_inheritance: true
+  paper_llm:                      # Phase 7-8 専用LLM（オプション、null=agent_llm にフォールバック）
+    provider: "openai"           # "openai" | "anthropic" | "local"
+    model_id: "gpt-4o"          # 論文生成・評価に使うモデル
+    temperature: 0.7
+    max_tokens: 4096
+    # ローカル7Bモデルでの論文品質が不十分な場合、ここで API モデルを指定する。
+    # 未設定（null）の場合は agent_llm がそのまま使われる。
   vlm:                          # VLM設定（Phase 7 のVLM統合に使用、オプション）
     provider: "openai"         # "openai" | "anthropic" | null（null=VLM無効）
     model_id: "gpt-4o"         # VLMモデル名
@@ -577,7 +584,7 @@ cli_args = {
 | カテゴリ | 欠落キー |
 |---------|---------|
 | ResourceSpec | `gpu_count`, `memory_gb`, `cpu_cores`, `gpu_type`, `timeout`, `no_web` |
-| ModelSpec | `base_model`, `dtype`, `agent_llm`, `rank`, `alpha` |
+| ModelSpec | `base_model`, `dtype`, `agent_llm`, `paper_llm`, `rank`, `alpha` |
 | ExecutionSpec | `max_depth`, `branch_factor`, `lambda_cost`, `beta`, `lcb_coef`, `no_sequential`, `seq_topk`, `lr`, `clip`, `ppo_steps`, `no_kl`, `squash_depth`, `no_snapshot_topk`, `strategy` |
 
 **影響**: ウィザード前段ステップ（Step 10）で検出した GPU 環境情報（gpu_count, memory_gb 等）が `spec_builder.py` のデフォルト値で上書きされ、検出結果が反映されない。

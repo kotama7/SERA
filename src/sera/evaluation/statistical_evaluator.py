@@ -47,6 +47,7 @@ class StatisticalEvaluator(Evaluator):
         exec_spec: Any = None,
         base_seed: int = 42,
         eval_logger: Any = None,
+        use_streaming: bool = True,
     ):
         self.executor = executor
         self.experiment_generator = experiment_generator
@@ -54,6 +55,72 @@ class StatisticalEvaluator(Evaluator):
         self.execution_spec = execution_spec or exec_spec
         self.base_seed = base_seed
         self.eval_logger = eval_logger
+        self.use_streaming = use_streaming
+
+    async def _run_experiment(
+        self,
+        node_id: str,
+        script_path: Path,
+        seed: int,
+        timeout_sec: int | None,
+    ) -> Any:
+        """Run an experiment, optionally using streaming execution.
+
+        When ``use_streaming`` is True, uses ``executor.run_stream()`` to
+        get real-time stdout/stderr output while the experiment runs.
+        Otherwise falls back to the synchronous ``executor.run()``.
+
+        Returns
+        -------
+        RunResult
+            The result of the experiment run.
+        """
+        if not self.use_streaming:
+            return self.executor.run(
+                node_id=node_id,
+                script_path=script_path,
+                seed=seed,
+                timeout_sec=timeout_sec,
+            )
+
+        from sera.execution.streaming import StreamEventType
+
+        run_result = None
+        async for event in self.executor.run_stream(
+            node_id=node_id,
+            script_path=script_path,
+            seed=seed,
+            timeout_sec=timeout_sec,
+        ):
+            if event.event_type == StreamEventType.STDOUT:
+                logger.debug("[%s] stdout: %s", node_id[:8], event.data)
+            elif event.event_type == StreamEventType.STDERR:
+                logger.info("[%s] stderr: %s", node_id[:8], event.data)
+            elif event.event_type in (
+                StreamEventType.COMPLETED,
+                StreamEventType.TIMEOUT,
+                StreamEventType.ERROR,
+            ):
+                run_result = event.metadata.get("run_result")
+
+        if run_result is None:
+            # Fallback: streaming ended without terminal event
+            from sera.execution.executor import RunResult
+
+            run_dir = Path(self.executor.work_dir) / "runs" / node_id
+            run_result = RunResult(
+                node_id=node_id,
+                success=False,
+                exit_code=-1,
+                stdout_path=run_dir / "stdout.log",
+                stderr_path=run_dir / "stderr.log",
+                metrics_path=None,
+                artifacts_dir=run_dir,
+                wall_time_sec=0.0,
+                seed=seed,
+            )
+
+        return run_result
 
     async def evaluate_initial(self, node: Any) -> None:
         """Run sequential_eval_initial repeats for quick estimation.
@@ -70,13 +137,15 @@ class StatisticalEvaluator(Evaluator):
         timeout = getattr(getattr(self.execution_spec, "evaluation", None), "timeout_per_run_sec", 600)
 
         # Generate experiment script if needed
-        script_path = await self.experiment_generator.generate(node)
+        generated = await self.experiment_generator.generate(node)
+        run_dir = Path(self.executor.work_dir) / "runs" / node.node_id
+        script_path = run_dir / generated.entry_point
 
         metric_name = self.problem_spec.objective.metric_name
 
         for i in range(n_initial):
             seed = self._derive_seed(node.node_id, node.eval_runs)
-            result = self.executor.run(
+            result = await self._run_experiment(
                 node_id=node.node_id,
                 script_path=script_path,
                 seed=seed,
@@ -180,13 +249,14 @@ class StatisticalEvaluator(Evaluator):
         scripts = list(run_dir.glob("experiment.*"))
         script_path = scripts[0] if scripts else run_dir / "experiment.py"
         if not script_path.exists():
-            script_path = await self.experiment_generator.generate(node)
+            generated = await self.experiment_generator.generate(node)
+            script_path = run_dir / generated.entry_point
 
         metric_name = self.problem_spec.objective.metric_name
 
         for i in range(remaining):
             seed = self._derive_seed(node.node_id, node.eval_runs)
-            result = self.executor.run(
+            result = await self._run_experiment(
                 node_id=node.node_id,
                 script_path=script_path,
                 seed=seed,

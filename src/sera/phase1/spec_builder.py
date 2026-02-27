@@ -184,15 +184,35 @@ class SpecBuilder:
         ----------
         cli_args : dict
             CLI arguments including: executor, gpu_count, memory_gb,
-            cpu_cores, gpu_type, gpu_required, timeout, no_web, work_dir.
+            cpu_cores, gpu_type, gpu_required, timeout, no_web, work_dir,
+            container_enabled, container_runtime, container_image, etc.
         """
         from sera.specs.resource_spec import (
             ResourceSpecModel,
             ComputeConfig,
+            SlurmConfig,
+            ContainerConfig,
             SandboxConfig,
             StorageConfig,
             NetworkConfig,
         )
+
+        # Build ContainerConfig if enabled
+        container_cfg = ContainerConfig()
+        if cli_args.get("container_enabled", False):
+            container_cfg = ContainerConfig(
+                enabled=True,
+                runtime=cli_args.get("container_runtime", "singularity"),
+                image=cli_args.get("container_image", ""),
+                bind_mounts=cli_args.get("container_bind_mounts", []),
+                gpu_enabled=cli_args.get("container_gpu_enabled", True),
+                extra_flags=cli_args.get("container_extra_flags", []),
+                overlay=cli_args.get("container_overlay", ""),
+                writable_tmpfs=cli_args.get("container_writable_tmpfs", False),
+            )
+
+        # Build SlurmConfig with container
+        slurm_cfg = SlurmConfig(container=container_cfg)
 
         compute_cfg = ComputeConfig(
             executor_type=cli_args.get("executor", "local"),
@@ -201,6 +221,7 @@ class SpecBuilder:
             cpu_cores=cli_args.get("cpu_cores", 8),
             gpu_type=cli_args.get("gpu_type", ""),
             gpu_required=cli_args.get("gpu_required", True),
+            slurm=slurm_cfg,
         )
         sandbox_cfg = SandboxConfig(
             experiment_timeout_sec=cli_args.get("timeout", 3600),

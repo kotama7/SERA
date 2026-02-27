@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TeacherPaper(BaseModel):
@@ -39,6 +39,15 @@ class TeacherPaperSetModel(BaseModel):
 
     selection_criteria: str = Field("", description="How these teacher papers were selected")
     teacher_papers: list[TeacherPaper] = Field(default_factory=list, description="The teacher papers")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_papers_key(cls, data: Any) -> Any:
+        """Phase 0 writes teachers under 'papers'; migrate to 'teacher_papers'."""
+        if isinstance(data, dict):
+            if "papers" in data and "teacher_papers" not in data:
+                data["teacher_papers"] = data.pop("papers")
+        return data
     datasets: list[dict] = Field(default_factory=list, description="Dataset information extracted from teacher papers")
     structure_summary: StructureSummary = Field(
         default_factory=StructureSummary, description="Aggregated structure summary"

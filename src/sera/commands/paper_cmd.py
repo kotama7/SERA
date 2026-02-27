@@ -3,12 +3,89 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
-import yaml
 from rich.console import Console
 
 console = Console()
+
+
+def _make_paper_agent_llm(paper_llm_config, resource_spec, log_path: Path):
+    """Create an AgentLLM from model_spec.paper_llm config for Phase 7-8."""
+    from sera.agent.agent_llm import AgentLLM
+
+    paper_model_spec = SimpleNamespace(
+        agent_llm=paper_llm_config,
+        base_model=SimpleNamespace(
+            id=paper_llm_config.model_id, family="", revision="", dtype=""
+        ),
+        vlm=SimpleNamespace(provider=None),
+        inference=SimpleNamespace(engine="transformers"),
+        get_family_config=lambda: None,
+    )
+    return AgentLLM(paper_model_spec, resource_spec, log_path)
+
+
+def _compile_latex(paper_dir: Path, bib_path: Path | None) -> bool:
+    """Run pdflatex (+ bibtex if bib exists) to produce paper.pdf.
+
+    Returns True on success, False on failure.
+    """
+    tex_path = paper_dir / "paper.tex"
+    if not tex_path.exists():
+        console.print("[red]paper.tex not found, skipping LaTeX compilation.[/red]")
+        return False
+
+    def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd,
+            cwd=str(paper_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    try:
+        # Pass 1
+        console.print("  [dim]pdflatex pass 1...[/dim]")
+        r = _run(["pdflatex", "-interaction=nonstopmode", "paper.tex"])
+        if r.returncode != 0:
+            console.print(f"[yellow]pdflatex pass 1 warnings (exit {r.returncode})[/yellow]")
+
+        # bibtex if bib file exists
+        if bib_path and bib_path.exists():
+            console.print("  [dim]bibtex...[/dim]")
+            _run(["bibtex", "paper"])
+
+        # Pass 2
+        console.print("  [dim]pdflatex pass 2...[/dim]")
+        r = _run(["pdflatex", "-interaction=nonstopmode", "paper.tex"])
+
+        # Pass 3 (resolve remaining cross-references)
+        console.print("  [dim]pdflatex pass 3...[/dim]")
+        r = _run(["pdflatex", "-interaction=nonstopmode", "paper.tex"])
+
+        pdf_path = paper_dir / "paper.pdf"
+        if pdf_path.exists():
+            console.print(f"[green]PDF compiled: {pdf_path}[/green]")
+            return True
+        else:
+            console.print("[red]paper.pdf was not produced.[/red]")
+            if r.stdout:
+                # Show last 20 lines of pdflatex output for debugging
+                lines = r.stdout.strip().split("\n")
+                for line in lines[-20:]:
+                    console.print(f"  [dim]{line}[/dim]")
+            return False
+
+    except FileNotFoundError:
+        console.print("[yellow]pdflatex not found. Install TeX Live to compile: sudo apt install texlive-latex-extra[/yellow]")
+        return False
+    except subprocess.TimeoutExpired:
+        console.print("[red]pdflatex timed out.[/red]")
+        return False
 
 
 def run_generate_paper(work_dir: str) -> None:
@@ -29,7 +106,16 @@ def run_generate_paper(work_dir: str) -> None:
     from sera.paper.paper_composer import PaperComposer
 
     log_dir = workspace / "logs"
-    agent_llm = AgentLLM(specs.model, specs.resource, log_dir / "agent_llm_log.jsonl")
+
+    # Use paper_llm if configured, otherwise fall back to agent_llm
+    paper_llm_config = getattr(specs.model, "paper_llm", None)
+    if paper_llm_config is not None:
+        console.print(
+            f"[cyan]Using paper_llm: {paper_llm_config.provider}/{paper_llm_config.model_id}[/cyan]"
+        )
+        agent_llm = _make_paper_agent_llm(paper_llm_config, specs.resource, log_dir / "agent_llm_log.jsonl")
+    else:
+        agent_llm = AgentLLM(specs.model, specs.resource, log_dir / "agent_llm_log.jsonl")
 
     # Build evidence store
     evidence = EvidenceStore.from_workspace(workspace)
@@ -145,6 +231,30 @@ def run_generate_paper(work_dir: str) -> None:
                     f.write(str(entry) + "\n\n")
 
     console.print(f"[green]Paper generated: {paper_dir / 'paper.md'}[/green]")
+
+    # --- LaTeX compilation ---
+    console.print("[cyan]Generating LaTeX...[/cyan]")
+    from sera.paper.latex_composer import LaTeXComposer
+
+    # Use relative path "figures" so pdflatex can find them from paper/ cwd
+    latex_composer = LaTeXComposer(figures_dir="figures")
+
+    metadata = dict(paper.metadata) if paper.metadata else {}
+    # Ensure title comes from problem spec if not in metadata
+    if "title" not in metadata:
+        title = getattr(specs.problem, "title", None) or getattr(specs.problem, "research_topic", "Untitled")
+        metadata["title"] = title
+
+    latex_src = latex_composer.compose_from_paper(paper)
+    tex_path = paper_dir / "paper.tex"
+    with open(tex_path, "w") as f:
+        f.write(latex_src)
+    console.print(f"[green]LaTeX source: {tex_path}[/green]")
+
+    bib_path = paper_dir / "paper.bib"
+    console.print("[cyan]Compiling PDF...[/cyan]")
+    _compile_latex(paper_dir, bib_path if bib_path.exists() else None)
+
     console.print("\nNext step: sera evaluate-paper")
 
 
@@ -172,7 +282,16 @@ def run_evaluate_paper(work_dir: str) -> None:
     from sera.utils.logging import JsonlLogger
 
     log_dir = workspace / "logs"
-    agent_llm = AgentLLM(specs.model, specs.resource, log_dir / "agent_llm_log.jsonl")
+
+    # Use paper_llm if configured, otherwise fall back to agent_llm
+    paper_llm_config = getattr(specs.model, "paper_llm", None)
+    if paper_llm_config is not None:
+        console.print(
+            f"[cyan]Using paper_llm: {paper_llm_config.provider}/{paper_llm_config.model_id}[/cyan]"
+        )
+        agent_llm = _make_paper_agent_llm(paper_llm_config, specs.resource, log_dir / "agent_llm_log.jsonl")
+    else:
+        agent_llm = AgentLLM(specs.model, specs.resource, log_dir / "agent_llm_log.jsonl")
     paper_logger = JsonlLogger(log_dir / "paper_log.jsonl")
 
     evaluator = PaperEvaluator()

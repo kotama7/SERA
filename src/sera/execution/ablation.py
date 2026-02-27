@@ -12,6 +12,7 @@ import copy
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -290,7 +291,9 @@ class AblationRunner:
 
         try:
             # Generate experiment script
-            script_path = await self.experiment_generator.generate(ablation_node)
+            generated = await self.experiment_generator.generate(ablation_node)
+            abl_run_dir = Path(self.executor.work_dir) / "runs" / ablation_node.node_id
+            script_path = abl_run_dir / generated.entry_point
 
             # Derive a deterministic seed
             seed = self._derive_seed(ablation_node.node_id)

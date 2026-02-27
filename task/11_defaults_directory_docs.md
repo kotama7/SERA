@@ -95,11 +95,15 @@ sera_workspace/                    # ResourceSpec.storage.work_dir
 
   runs/
     <node_id>/
-      experiment.py                # LLM生成の実験スクリプト
+      experiment.{ext}             # LLM生成の実験エントリポイント（§7.2）
+      {supplementary_files}        # 補助ファイル（§7.2.1、multi_file=True 時）
       stdout.log
       stderr.log
       metrics.json                 # §7.4参照
       artifacts/                   # 図、チェックポイント等
+      {build_file}                 # ビルド/依存ファイル（§7.3.3、dependency 設定時）
+      build_stdout.log             # ビルドログ（§7.3.2、compiled=True 時）
+      install_stdout.log           # 依存インストールログ（§7.3.3、dependency 設定時）
 
   logs/
     search_log.jsonl               # §17.1参照

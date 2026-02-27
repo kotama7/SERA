@@ -62,14 +62,46 @@ class SecondaryMetric(BaseModel):
     weight_in_tiebreak: float = Field(0.3, description="Weight when breaking ties on the primary metric")
 
 
+class DependencyConfig(BaseModel):
+    """Dependency management configuration (§7.3.3)."""
+
+    manager: str = Field("pip", description="Dependency manager: 'pip', 'conda', 'cargo', 'cmake', 'go_mod'")
+    install_command: str = Field("", description="Install command (auto-inferred from manager if empty)")
+    build_file: str = Field("", description="Build/dependency file name, e.g. 'requirements.txt'")
+    llm_generated_build: bool = Field(False, description="Whether LLM generates the build file per experiment")
+    pre_install_commands: list[str] = Field(default_factory=list, description="Commands to run before install")
+    post_install_commands: list[str] = Field(default_factory=list, description="Commands to run after install")
+    install_timeout_sec: int = Field(300, description="Install timeout in seconds")
+    cache_dir: str = Field("", description="Package cache directory (uses default if empty)")
+    allowed_packages: list[str] = Field(default_factory=list, description="Package name whitelist (empty=no restriction)")
+    require_pinned_versions: bool = Field(False, description="Reject unpinned dependency versions")
+
+
 class LanguageConfig(BaseModel):
     """Experiment language configuration for multi-language support."""
 
+    # Existing fields (§7.3.1)
     name: str = Field("python", description="Programming language name")
     interpreter_command: str = Field("python", description="Command to invoke the interpreter")
     file_extension: str = Field(".py", description="File extension for experiment scripts")
     seed_arg_format: str = Field("--seed {seed}", description="Format string for passing seed argument")
     code_block_tag: str = Field("python", description="Markdown fenced code block language tag")
+
+    # Compiled language support (§7.3.2)
+    compiled: bool = Field(False, description="Whether this is a compiled language")
+    compile_command: str = Field("", description="Compiler command, e.g. 'g++', 'cargo build --release'")
+    compile_flags: list[str] = Field(default_factory=list, description="Compiler flags, e.g. ['-O2', '-std=c++17']")
+    link_flags: list[str] = Field(default_factory=list, description="Linker flags, e.g. ['-lm', '-lpthread']")
+    binary_name: str = Field("experiment", description="Output binary name")
+    build_timeout_sec: int = Field(120, description="Build step timeout in seconds")
+
+    # Multi-file project support (§7.2.1)
+    multi_file: bool = Field(True, description="Allow LLM to generate multiple source files")
+    max_files: int = Field(10, description="Maximum number of generated files per experiment")
+    max_total_size_bytes: int = Field(1048576, description="Maximum total size of generated files (1MB)")
+
+    # Dependency management (§7.3.3)
+    dependency: DependencyConfig | None = Field(None, description="Dependency management config (None=skip)")
 
 
 class ProblemSpecModel(BaseModel):

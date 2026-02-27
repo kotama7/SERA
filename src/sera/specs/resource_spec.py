@@ -9,6 +9,20 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 
+class ContainerConfig(BaseModel):
+    """Container execution settings for SLURM+Singularity/Apptainer/Docker (§23.6)."""
+
+    enabled: bool = Field(False, description="Enable container execution")
+    runtime: str = Field("singularity", description="Container runtime: 'singularity', 'apptainer', 'docker'")
+    image: str = Field("", description="Container image URI or .sif path")
+    bind_mounts: list[str] = Field(default_factory=list, description="Bind mounts, e.g. ['/data:/data:ro']")
+    env_vars: dict[str, str] = Field(default_factory=dict, description="Environment variables inside container")
+    gpu_enabled: bool = Field(True, description="GPU passthrough (--nv for Singularity, --gpus all for Docker)")
+    extra_flags: list[str] = Field(default_factory=list, description="Runtime-specific extra flags")
+    overlay: str = Field("", description="Overlay filesystem (Singularity/Apptainer only)")
+    writable_tmpfs: bool = Field(False, description="Enable writable tmpfs (Singularity/Apptainer: --writable-tmpfs)")
+
+
 class SlurmConfig(BaseModel):
     """SLURM scheduler settings."""
 
@@ -17,6 +31,7 @@ class SlurmConfig(BaseModel):
     time_limit: str = Field("04:00:00", description="Wall-clock time limit")
     modules: list[str] = Field(default_factory=list, description="Environment modules to load")
     sbatch_extra: list[str] = Field(default_factory=list, description="Extra sbatch directives")
+    container: ContainerConfig = Field(default_factory=ContainerConfig, description="Container config (§23.6)")
 
 
 class DockerConfig(BaseModel):

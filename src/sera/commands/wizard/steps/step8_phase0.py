@@ -65,6 +65,7 @@ def step8_phase0(state: WizardState, lang: str, work_dir: Path) -> None:
         teacher_papers=params["teacher_papers"],
         citation_depth=params["citation_depth"],
         years_bias=params["years_bias"],
+        api_priority=params.get("api_priority", "semantic_scholar,crossref,arxiv,web"),
     )
 
     # Count collected papers

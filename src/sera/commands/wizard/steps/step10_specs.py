@@ -1,11 +1,14 @@
 """Step 10: Generate and review specs with environment detection.
 
-Implements 5 substeps following the spec (§26.5.10):
+Implements 8 substeps following the spec (§26.5.10):
   10a: ProblemSpec — LLM generation + review
   10b: ModelSpec — environment detection + provider selection
   10c: ResourceSpec — env defaults + MCP server config
   10d: PlanSpec — reward method / ECHO / agent_commands review
   10e: ExecutionSpec — main parameters + learning.enabled
+  10f: LanguageConfig — compiled language + multi-file project settings
+  10g: DependencyConfig — dependency management settings
+  10h: ContainerConfig — SLURM + container integration (only if executor=slurm)
 """
 
 from __future__ import annotations
@@ -45,24 +48,39 @@ def step10_specs(state: WizardState, lang: str, work_dir: Path) -> None:
     specs_dir = work_dir / "specs"
 
     # ── 10a: ProblemSpec ──────────────────────────────────────────────
-    console.print("\n  [bold cyan][1/5] ProblemSpec[/bold cyan]")
+    console.print("\n  [bold cyan][1/8] ProblemSpec[/bold cyan]")
     problem_spec_data = _substep_problem_spec(state, params, specs_dir, work_dir)
 
     # ── 10b: ModelSpec ────────────────────────────────────────────────
-    console.print("\n  [bold cyan][2/5] ModelSpec[/bold cyan]")
+    console.print("\n  [bold cyan][2/8] ModelSpec[/bold cyan]")
     _substep_model_spec(params, env)
 
     # ── 10c: ResourceSpec ─────────────────────────────────────────────
-    console.print("\n  [bold cyan][3/5] ResourceSpec[/bold cyan]")
+    console.print("\n  [bold cyan][3/8] ResourceSpec[/bold cyan]")
     _substep_resource_spec(params, env)
 
     # ── 10d: PlanSpec ─────────────────────────────────────────────────
-    console.print("\n  [bold cyan][4/5] PlanSpec[/bold cyan]")
+    console.print("\n  [bold cyan][4/8] PlanSpec[/bold cyan]")
     _substep_plan_spec(params)
 
     # ── 10e: ExecutionSpec ────────────────────────────────────────────
-    console.print("\n  [bold cyan][5/5] ExecutionSpec[/bold cyan]")
+    console.print("\n  [bold cyan][5/8] ExecutionSpec[/bold cyan]")
     _substep_execution_spec(params, env)
+
+    # ── 10f: LanguageConfig ────────────────────────────────────────────
+    console.print("\n  [bold cyan][6/8] LanguageConfig[/bold cyan]")
+    _substep_language_config(params)
+
+    # ── 10g: DependencyConfig ──────────────────────────────────────────
+    console.print("\n  [bold cyan][7/8] DependencyConfig[/bold cyan]")
+    _substep_dependency_config(params)
+
+    # ── 10h: ContainerConfig (SLURM only) ──────────────────────────────
+    if params.get("executor") == "slurm":
+        console.print("\n  [bold cyan][8/8] ContainerConfig (SLURM)[/bold cyan]")
+        _substep_container_config(params)
+    else:
+        console.print("\n  [dim][8/8] ContainerConfig — skipped (executor != slurm)[/dim]")
 
     state.specs_reviewed = True
 
@@ -289,6 +307,217 @@ def _substep_execution_spec(params: dict, env: dict) -> None:
     console.print(f"    learning.enabled: {params['learning_enabled']}")
     console.print(f"    max_nodes:        {params['max_nodes']}")
     console.print(f"    repeats:          {params['repeats']}")
+
+
+# ---------------------------------------------------------------------------
+# 10f: LanguageConfig — compiled language + multi-file project settings
+# ---------------------------------------------------------------------------
+
+# Language presets: name → (interpreter, ext, code_block_tag, compiled, compile_command, default_flags)
+_LANG_PRESETS: dict[str, dict[str, Any]] = {
+    "python": {"interpreter_command": "python", "file_extension": ".py", "code_block_tag": "python",
+               "compiled": False},
+    "r": {"interpreter_command": "Rscript", "file_extension": ".R", "code_block_tag": "r",
+           "compiled": False},
+    "julia": {"interpreter_command": "julia", "file_extension": ".jl", "code_block_tag": "julia",
+              "compiled": False},
+    "cpp": {"interpreter_command": "", "file_extension": ".cpp", "code_block_tag": "cpp",
+            "compiled": True, "compile_command": "g++", "compile_flags": ["-O2", "-std=c++17"],
+            "link_flags": ["-lm"], "binary_name": "experiment"},
+    "rust": {"interpreter_command": "", "file_extension": ".rs", "code_block_tag": "rust",
+             "compiled": True, "compile_command": "cargo build --release", "compile_flags": [],
+             "link_flags": [], "binary_name": "target/release/experiment"},
+    "go": {"interpreter_command": "", "file_extension": ".go", "code_block_tag": "go",
+           "compiled": True, "compile_command": "go build", "compile_flags": ["-o", "experiment"],
+           "link_flags": [], "binary_name": "experiment"},
+}
+
+
+def _substep_language_config(params: dict) -> None:
+    """Configure LanguageConfig: language selection, compiled settings, multi-file."""
+    lang_name = select(
+        "Experiment language",
+        ["python", "r", "julia", "cpp", "rust", "go"],
+        default=params.get("language_name", "python"),
+    )
+    params["language_name"] = lang_name
+
+    preset = _LANG_PRESETS[lang_name]
+    params["language_compiled"] = preset.get("compiled", False)
+    params["language_interpreter"] = preset.get("interpreter_command", "python")
+    params["language_file_ext"] = preset["file_extension"]
+    params["language_code_block_tag"] = preset["code_block_tag"]
+
+    if params["language_compiled"]:
+        console.print(f"  [bold]Compiled language: {lang_name}[/bold]")
+        params["compile_command"] = Prompt.ask(
+            "  Compile command",
+            default=params.get("compile_command", preset.get("compile_command", "")),
+        )
+        flags_str = Prompt.ask(
+            "  Compile flags (space-separated)",
+            default=" ".join(params.get("compile_flags", preset.get("compile_flags", []))),
+        )
+        params["compile_flags"] = flags_str.split() if flags_str.strip() else []
+        link_str = Prompt.ask(
+            "  Link flags (space-separated)",
+            default=" ".join(params.get("link_flags", preset.get("link_flags", []))),
+        )
+        params["link_flags"] = link_str.split() if link_str.strip() else []
+        params["binary_name"] = Prompt.ask(
+            "  Output binary name",
+            default=params.get("binary_name", preset.get("binary_name", "experiment")),
+        )
+        params["build_timeout_sec"] = IntPrompt.ask(
+            "  Build timeout (sec)", default=params.get("build_timeout_sec", 120)
+        )
+
+    # Multi-file projects
+    params["multi_file"] = Confirm.ask(
+        "  Allow multi-file projects?", default=params.get("multi_file", True)
+    )
+    if params["multi_file"]:
+        if Confirm.ask("  Configure multi-file limits?", default=False):
+            params["max_files"] = IntPrompt.ask("    Max files", default=params.get("max_files", 10))
+            params["max_total_size_bytes"] = IntPrompt.ask(
+                "    Max total size (bytes)", default=params.get("max_total_size_bytes", 1048576)
+            )
+        else:
+            params.setdefault("max_files", 10)
+            params.setdefault("max_total_size_bytes", 1048576)
+
+    # Summary
+    console.print(f"\n  [bold]LanguageConfig Summary:[/bold]")
+    console.print(f"    language:    {lang_name}")
+    console.print(f"    compiled:    {params['language_compiled']}")
+    console.print(f"    multi_file:  {params['multi_file']}")
+
+
+# ---------------------------------------------------------------------------
+# 10g: DependencyConfig — dependency management settings
+# ---------------------------------------------------------------------------
+
+# Default build files per manager
+_DEFAULT_BUILD_FILES: dict[str, str] = {
+    "pip": "requirements.txt",
+    "conda": "environment.yml",
+    "cargo": "Cargo.toml",
+    "cmake": "CMakeLists.txt",
+    "go_mod": "go.mod",
+}
+
+
+def _substep_dependency_config(params: dict) -> None:
+    """Configure DependencyConfig: manager, build file, LLM generation."""
+    if not Confirm.ask("  Configure dependency management?", default=False):
+        params["dependency_enabled"] = False
+        console.print("  [dim]Dependency management: skipped (no external dependencies)[/dim]")
+        return
+
+    params["dependency_enabled"] = True
+
+    # Auto-infer manager from language
+    lang = params.get("language_name", "python")
+    default_manager = {"python": "pip", "r": "conda", "julia": "conda",
+                       "cpp": "cmake", "rust": "cargo", "go": "go_mod"}.get(lang, "pip")
+
+    params["dep_manager"] = select(
+        "Dependency manager",
+        ["pip", "conda", "cargo", "cmake", "go_mod"],
+        default=default_manager,
+    )
+
+    manager = params["dep_manager"]
+    params["dep_build_file"] = Prompt.ask(
+        "  Build file name",
+        default=params.get("dep_build_file", _DEFAULT_BUILD_FILES.get(manager, "")),
+    )
+
+    params["dep_llm_generated_build"] = Confirm.ask(
+        "  Let LLM generate build file per experiment?", default=True,
+    )
+
+    params["dep_install_timeout_sec"] = IntPrompt.ask(
+        "  Install timeout (sec)", default=params.get("dep_install_timeout_sec", 300),
+    )
+
+    # Security options
+    if Confirm.ask("  Configure security options?", default=False):
+        allowed_str = Prompt.ask(
+            "    Allowed packages (comma-separated, empty=no restriction)", default=""
+        )
+        params["dep_allowed_packages"] = (
+            [p.strip() for p in allowed_str.split(",") if p.strip()] if allowed_str.strip() else []
+        )
+        params["dep_require_pinned"] = Confirm.ask("    Require pinned versions?", default=False)
+    else:
+        params.setdefault("dep_allowed_packages", [])
+        params.setdefault("dep_require_pinned", False)
+
+    # Summary
+    console.print(f"\n  [bold]DependencyConfig Summary:[/bold]")
+    console.print(f"    manager:            {params['dep_manager']}")
+    console.print(f"    build_file:         {params['dep_build_file']}")
+    console.print(f"    llm_generated_build: {params['dep_llm_generated_build']}")
+
+
+# ---------------------------------------------------------------------------
+# 10h: ContainerConfig — SLURM + container integration
+# ---------------------------------------------------------------------------
+
+
+def _substep_container_config(params: dict) -> None:
+    """Configure ContainerConfig for SLURM: Singularity/Apptainer/Docker."""
+    if not Confirm.ask("  Use container on SLURM?", default=False):
+        params["container_enabled"] = False
+        console.print("  [dim]Container: disabled (bare SLURM execution)[/dim]")
+        return
+
+    params["container_enabled"] = True
+
+    params["container_runtime"] = select(
+        "Container runtime",
+        ["singularity", "apptainer", "docker"],
+        default=params.get("container_runtime", "singularity"),
+    )
+
+    params["container_image"] = Prompt.ask(
+        "  Container image (URI or .sif path)",
+        default=params.get("container_image", ""),
+    )
+
+    params["container_gpu_enabled"] = Confirm.ask(
+        "  Enable GPU passthrough?",
+        default=params.get("container_gpu_enabled", True),
+    )
+
+    # Bind mounts
+    mounts_str = Prompt.ask(
+        "  Bind mounts (comma-separated, e.g. /data:/data:ro,/scratch:/scratch)",
+        default=",".join(params.get("container_bind_mounts", [])),
+    )
+    params["container_bind_mounts"] = (
+        [m.strip() for m in mounts_str.split(",") if m.strip()] if mounts_str.strip() else []
+    )
+
+    # Extra flags
+    if Confirm.ask("  Configure advanced container options?", default=False):
+        params["container_writable_tmpfs"] = Confirm.ask("    Writable tmpfs?", default=False)
+        overlay = Prompt.ask("    Overlay file (empty=none)", default="")
+        params["container_overlay"] = overlay
+        extra = Prompt.ask("    Extra flags (space-separated)", default="")
+        params["container_extra_flags"] = extra.split() if extra.strip() else []
+    else:
+        params.setdefault("container_writable_tmpfs", False)
+        params.setdefault("container_overlay", "")
+        params.setdefault("container_extra_flags", [])
+
+    # Summary
+    console.print(f"\n  [bold]ContainerConfig Summary:[/bold]")
+    console.print(f"    runtime:     {params['container_runtime']}")
+    console.print(f"    image:       {params['container_image']}")
+    console.print(f"    GPU:         {params['container_gpu_enabled']}")
+    console.print(f"    bind_mounts: {params['container_bind_mounts']}")
 
 
 # ---------------------------------------------------------------------------

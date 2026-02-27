@@ -324,8 +324,89 @@ class CitationSearcher:
 4. best と比較して有意差があるかを判定
 ```
 
-### 11.7 出力（必須）
+### 11.7 LaTeX コンパイル（auto_compile_latex=true の場合）
+
+`run_generate_paper()` のステップ 6（統合・最終出力）の後に、LaTeX コンパイルを自動実行する。
+`execution_spec.paper.auto_compile_latex` が `true` の場合に有効。
+
+#### 11.7.1 .tex 生成
+```python
+class LaTeXComposer:
+    """Markdown → LaTeX 変換。paper/latex_composer.py に実装。"""
+
+    def __init__(self, figures_dir: str | Path | None = None):
+        """
+        figures_dir: 図ディレクトリの相対パス（pdflatex の cwd からの相対）。
+        paper/ から実行するため "figures" を指定。
+        """
+
+    def compose_from_paper(self, paper: Paper) -> str:
+        """Paper dataclass から完全な LaTeX ソースを生成。
+        - paper.content（Markdown）を LaTeX に変換
+        - paper.metadata から title/author/date を抽出
+        - Markdown の見出し・太字・斜体・画像・表・コードブロックを LaTeX に変換
+        - 本文中の References セクションを \\thebibliography 環境に変換
+        """
+```
+
+変換対応:
+| Markdown | LaTeX |
+|----------|-------|
+| `# Heading` | `\section{Heading}` |
+| `## Heading` | `\subsection{Heading}` |
+| `**bold**` | `\textbf{bold}` |
+| `*italic*` | `\textit{italic}` |
+| `` `code` `` | `\texttt{code}` |
+| `![caption](path)` | `\begin{figure}...\includegraphics{figures/filename}...\end{figure}` |
+| Markdown テーブル | `\begin{table}...\begin{tabular}...\end{table}` |
+| ` ```code``` ` | `\begin{verbatim}...\end{verbatim}` |
+
+テンプレート（`paper_spec.format` 対応）:
+- `format: arxiv`（既定）: `\documentclass{article}` + `geometry`, `natbib`, `booktabs`, `hyperref` 等
+
+#### 11.7.2 pdflatex コンパイル
+```text
+実行手順（paper/ ディレクトリを cwd として実行）:
+1. pdflatex -interaction=nonstopmode paper.tex   (Pass 1: 参照の仮解決)
+2. bibtex paper                                   (paper.bib が存在する場合のみ)
+3. pdflatex -interaction=nonstopmode paper.tex   (Pass 2: 引用解決)
+4. pdflatex -interaction=nonstopmode paper.tex   (Pass 3: 相互参照の最終解決)
+
+エラーハンドリング:
+- pdflatex 未インストール: 警告メッセージを表示しスキップ（致命的エラーではない）
+- タイムアウト: 各パス 120 秒。超過時はエラー表示
+- コンパイルエラー: nonstopmode で続行し、paper.pdf が生成されたか確認
+- paper.pdf 未生成時: pdflatex の末尾 20 行をデバッグ情報として表示
+```
+
+#### 11.7.3 paper_llm（Phase 7-8 専用モデル）
+
+Phase 7-8 で使用する LLM は `ModelSpec.paper_llm` で指定する。
+Phase 1（freeze-specs）で凍結され、以降変更不可。
+
+```yaml
+# model_spec.yaml
+agent_llm:                        # Phase 2-6 で使用（探索・実験生成等）
+  provider: local
+  model_id: same_as_base
+  temperature: 0.7
+  max_tokens: 4096
+
+paper_llm:                        # Phase 7-8 で使用（論文生成・評価）
+  provider: openai                # "openai" | "anthropic" | "local"
+  model_id: gpt-4o
+  temperature: 0.7
+  max_tokens: 4096
+```
+
+- `paper_llm` が `null`（未設定）の場合: `agent_llm` にフォールバック
+- `paper_llm` が設定されている場合: Phase 7-8 の AgentLLM は `paper_llm` の設定で初期化
+- `run_generate_paper()` および `run_evaluate_paper()` の両方で参照
+
+### 11.8 出力（必須）
 - `paper/paper.md`（既定）
+- `paper/paper.tex`（LaTeX ソース、LaTeXComposer で生成）
+- `paper/paper.pdf`（pdflatex でコンパイル、auto_compile_latex=true の場合）
 - `paper/figures/*.png`（matplotlib で生成、最大12枚、300 DPI）
 - `paper/paper.bib`（BibTeX：@article 形式、citation_key / title / author / year / journal / doi）
 - `paper/experiment_summaries.json`（ステップ1で生成、ベストノード・結果テーブル・収束データ等）

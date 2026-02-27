@@ -122,12 +122,16 @@ def run_research(
 
     eval_logger = JsonlLogger(log_dir / "eval_log.jsonl")
 
+    # Enable streaming execution by default for all executor types
+    use_streaming = True
+
     evaluator = StatisticalEvaluator(
         executor=executor,
         experiment_generator=experiment_generator,
         problem_spec=specs.problem,
         execution_spec=specs.execution,
         eval_logger=eval_logger,
+        use_streaming=use_streaming,
     )
 
     # Initialize AgentLoop (ReAct tool-using agent) when tools are enabled
@@ -202,7 +206,7 @@ def run_research(
 
     # PPO and lineage disabled for lightweight runs (require local GPU model)
     learning_enabled = getattr(specs.execution.learning, "enabled", True)
-    provider = getattr(specs.model.agent_llm, "provider", "openai") if specs.model.agent_llm else "openai"
+    provider = getattr(specs.model.agent_llm, "provider", "local") if specs.model.agent_llm else "local"
     ppo_trainer = None
     lineage_manager = None
     pruner = None

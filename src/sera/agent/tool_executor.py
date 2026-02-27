@@ -552,7 +552,7 @@ class ToolExecutor:
             self._log_execution(tool_call, output, wall_time, success=True, truncated=truncated)
             self._tool_call_count += 1
             self._update_node_tool_usage(tool_call.tool_name, success=True, wall_time_sec=wall_time)
-            return ToolResult(
+            result = ToolResult(
                 tool_name=tool_call.tool_name,
                 call_id=tool_call.call_id,
                 success=True,
@@ -561,6 +561,16 @@ class ToolExecutor:
                 wall_time_sec=wall_time,
                 truncated=truncated,
             )
+            # §28.3.2: Populate stdout/stderr preview for execution tools
+            if tool_call.tool_name in EXECUTION_TOOLS and isinstance(output, dict):
+                result.is_execution = True
+                stdout_text = output.get("stdout_tail") or output.get("stdout") or ""
+                if stdout_text:
+                    result.stdout_preview = "\n".join(stdout_text.strip().splitlines()[-20:])
+                stderr_text = output.get("stderr_tail") or output.get("stderr") or ""
+                if stderr_text:
+                    result.stderr_preview = "\n".join(stderr_text.strip().splitlines()[-10:])
+            return result
         except PermissionError as exc:
             wall_time = time.monotonic() - start
             self._log_execution(tool_call, None, wall_time, success=False, error=str(exc))

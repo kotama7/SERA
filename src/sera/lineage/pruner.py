@@ -54,8 +54,8 @@ class Pruner:
 
         Returns
         -------
-        list[str]
-            The ``node_id`` values of all pruned nodes.
+        list[SearchNode]
+            The pruned ``SearchNode`` objects.
         """
         # Build protection set
         protected = self._build_protection_set(all_nodes, exec_spec)

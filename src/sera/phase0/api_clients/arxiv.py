@@ -12,7 +12,7 @@ import httpx
 
 from sera.phase0.api_clients.base import BaseScholarClient, PaperResult
 
-BASE_URL = "http://export.arxiv.org/api/query"
+BASE_URL = "https://export.arxiv.org/api/query"
 _PDF_BASE_URL = "https://arxiv.org/pdf"
 
 # Atom namespace
@@ -90,7 +90,7 @@ class ArxivClient(BaseScholarClient):
     """Async client for the arXiv Atom API."""
 
     API_NAME = "arxiv"
-    ENDPOINT_URL = "http://export.arxiv.org/api/query"
+    ENDPOINT_URL = "https://export.arxiv.org/api/query"
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(timeout=30.0)

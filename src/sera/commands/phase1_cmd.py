@@ -101,6 +101,40 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
                 if phase_key in plan_spec.turn_rewards.phase_rewards:
                     plan_spec.turn_rewards.phase_rewards[phase_key].weight = cli_args[cli_key]
 
+    # Apply wizard LanguageConfig fields to problem_spec
+    if "language_name" in cli_args:
+        from sera.specs.problem_spec import LanguageConfig, DependencyConfig
+
+        lang_kwargs: dict = {
+            "name": cli_args.get("language_name", "python"),
+            "interpreter_command": cli_args.get("language_interpreter", "python"),
+            "file_extension": cli_args.get("language_file_ext", ".py"),
+            "seed_arg_format": cli_args.get("seed_arg_format", "--seed {seed}"),
+            "code_block_tag": cli_args.get("language_code_block_tag", "python"),
+            "compiled": cli_args.get("language_compiled", False),
+            "compile_command": cli_args.get("compile_command", ""),
+            "compile_flags": cli_args.get("compile_flags", []),
+            "link_flags": cli_args.get("link_flags", []),
+            "binary_name": cli_args.get("binary_name", "experiment"),
+            "build_timeout_sec": cli_args.get("build_timeout_sec", 120),
+            "multi_file": cli_args.get("multi_file", True),
+            "max_files": cli_args.get("max_files", 10),
+            "max_total_size_bytes": cli_args.get("max_total_size_bytes", 1048576),
+        }
+
+        # Build DependencyConfig if enabled
+        if cli_args.get("dependency_enabled", False):
+            lang_kwargs["dependency"] = DependencyConfig(
+                manager=cli_args.get("dep_manager", "pip"),
+                build_file=cli_args.get("dep_build_file", ""),
+                llm_generated_build=cli_args.get("dep_llm_generated_build", False),
+                install_timeout_sec=cli_args.get("dep_install_timeout_sec", 300),
+                allowed_packages=cli_args.get("dep_allowed_packages", []),
+                require_pinned_versions=cli_args.get("dep_require_pinned", False),
+            )
+
+        problem_spec.language = LanguageConfig(**lang_kwargs)
+
     # If problem_spec is default (no manipulated_variables), try to build via LLM
     if auto and not problem_spec.manipulated_variables:
         from sera.agent.agent_llm import AgentLLM

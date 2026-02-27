@@ -100,7 +100,9 @@ class BootstrapEvaluator(Evaluator):
         )
 
         # Generate experiment script if needed
-        script_path = await self.experiment_generator.generate(node)
+        generated = await self.experiment_generator.generate(node)
+        run_dir_gen = Path(self.executor.work_dir) / "runs" / node.node_id
+        script_path = run_dir_gen / generated.entry_point
 
         metric_name = self.problem_spec.objective.metric_name
 
@@ -230,7 +232,8 @@ class BootstrapEvaluator(Evaluator):
         scripts = list(run_dir.glob("experiment.*"))
         script_path = scripts[0] if scripts else run_dir / "experiment.py"
         if not script_path.exists():
-            script_path = await self.experiment_generator.generate(node)
+            generated = await self.experiment_generator.generate(node)
+            script_path = run_dir / generated.entry_point
 
         metric_name = self.problem_spec.objective.metric_name
 
@@ -371,8 +374,13 @@ def bootstrap_update_stats(
 
     values = []
     for m in node.metrics_raw:
-        if isinstance(m, dict) and metric_name in m:
-            values.append(float(m[metric_name]))
+        if isinstance(m, dict):
+            # Support nested m["primary"]["value"] format (standard metrics.json)
+            primary = m.get("primary")
+            if isinstance(primary, dict) and "value" in primary:
+                values.append(float(primary["value"]))
+            elif metric_name in m:
+                values.append(float(m[metric_name]))
         elif isinstance(m, (int, float)):
             values.append(float(m))
 

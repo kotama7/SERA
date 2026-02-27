@@ -76,10 +76,20 @@ class OpenProblem(BaseModel):
     severity: str = Field("medium", description="How critical this problem is")
 
 
+class PaperScore(BaseModel):
+    """Score breakdown for a single paper (produced by Phase-0 ranking)."""
+
+    paper_id: str = Field(..., description="Paper identifier")
+    citation_norm: float = Field(0.0, description="Normalised citation score log(1+c)/log(1+max_c)")
+    relevance_score: float = Field(0.0, description="Keyword-overlap relevance score")
+    combined_score: float = Field(0.0, description="Weighted combination of citation_norm and relevance_score")
+
+
 class RelatedWorkSpecModel(BaseModel):
     """Aggregated related-work specification produced by Phase-0."""
 
     papers: list[Paper] = Field(default_factory=list, description="All retrieved papers")
+    scores: list[PaperScore] = Field(default_factory=list, description="Per-paper score breakdowns from Phase-0 ranking")
     clusters: list[Cluster] = Field(default_factory=list, description="Thematic clusters")
     baseline_candidates: list[BaselineCandidate] = Field(default_factory=list, description="Candidate baselines")
     common_metrics: list[CommonMetric] = Field(

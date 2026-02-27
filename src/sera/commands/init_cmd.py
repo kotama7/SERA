@@ -45,9 +45,10 @@ def run_init(input1_path: str, work_dir: str) -> None:
     for d in dirs:
         (workspace / d).mkdir(parents=True, exist_ok=True)
 
-    # Copy Input-1 to specs/
+    # Copy Input-1 to specs/ (skip if already in place)
     dest = workspace / "specs" / "input1.yaml"
-    shutil.copy2(input1_file, dest)
+    if input1_file.resolve() != dest.resolve():
+        shutil.copy2(input1_file, dest)
 
     console.print(f"[green]Workspace initialized at {workspace}[/green]")
     console.print(f"[green]Input-1 copied to {dest}[/green]")

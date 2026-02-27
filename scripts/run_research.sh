@@ -21,7 +21,8 @@
 set -euo pipefail
 
 # --- パス設定 ----------------------------------------------------------------
-SERA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# SLURM実行時は SLURM_SUBMIT_DIR を使用（sbatchがスクリプトをコピーするため）
+SERA_ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VENV_DIR="${SERA_VENV_DIR:-${SERA_ROOT}/.venv}"
 WORK_DIR="${SERA_WORK_DIR:-./sera_workspace}"
 
@@ -29,15 +30,26 @@ WORK_DIR="${SERA_WORK_DIR:-./sera_workspace}"
 mkdir -p "${SERA_ROOT}/logs"
 
 # --- 環境 activate -----------------------------------------------------------
-if [ ! -d "$VENV_DIR" ]; then
-    echo "ERROR: .venv が見つかりません: ${VENV_DIR}"
-    echo "先に GPU ノード上でセットアップを実行してください:"
-    echo "  srun --partition=sx40 --time=01:00:00 bash scripts/setup_env.sh"
-    exit 1
+# .env ファイルから API キーを読み込み
+if [ -f "${SERA_ROOT}/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "${SERA_ROOT}/.env"
+    set +a
+    echo ".env loaded"
 fi
 
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
+if [ -d "$VENV_DIR" ]; then
+    # shellcheck disable=SC1091
+    source "${VENV_DIR}/bin/activate"
+elif command -v conda &>/dev/null; then
+    # conda 環境を使用（.venv がない場合のフォールバック）
+    eval "$(conda shell.bash hook)"
+    echo "Using conda environment"
+else
+    echo "ERROR: .venv も conda も見つかりません"
+    exit 1
+fi
 
 # --- 環境情報記録 ------------------------------------------------------------
 echo "=== SERA Research Job ==="
@@ -54,8 +66,10 @@ print(f'torch:  {torch.__version__}')
 print(f'CUDA:   {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     for i in range(torch.cuda.device_count()):
-        print(f'GPU {i}: {torch.cuda.get_device_name(i)} ({torch.cuda.get_device_properties(i).total_mem / 1024**3:.1f} GB)')
-"
+        props = torch.cuda.get_device_properties(i)
+        mem = getattr(props, 'total_memory', getattr(props, 'total_mem', 0))
+        print(f'GPU {i}: {torch.cuda.get_device_name(i)} ({mem / 1024**3:.1f} GB)')
+" || echo "(torch info skipped)"
 echo ""
 
 # --- 実行 --------------------------------------------------------------------
