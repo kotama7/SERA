@@ -191,6 +191,7 @@ node.se = math.sqrt(bm_var)
 `StatisticalEvaluator.update_stats` と同一のロジック:
 
 - `metrics_raw` の各エントリが dict の場合: `metric_name` キーの値を `float` として抽出
+- `StatisticalEvaluator` ではネストされた `m["primary"]["value"]` 形式とフラットな `m[metric_name]` 形式の両方をサポートするが、`BootstrapEvaluator` はフラットな `m[metric_name]` 形式のみをサポートする
 - エントリ自体が数値（`int` / `float`）の場合: そのまま使用
 
 ### 乱数の再現性
@@ -233,7 +234,7 @@ result = sorted_data[lo] * (1 - frac) + sorted_data[hi] * frac
 |------|---------------------|-------------------|
 | LCB 計算方法 | `mu - lcb_coef * se`（解析的） | パーセンタイル法（リサンプリング） |
 | SE 計算方法 | `sqrt(不偏分散 / n)` | ブートストラップ平均の標準偏差 |
-| UCB | 計算しない | `percentile((1-alpha/2)*100)` |
+| UCB | `mu + lcb_coef * se` | `percentile((1-alpha/2)*100)` |
 | 分布仮定 | 正規分布（暗黙的） | ノンパラメトリック |
 | 追加パラメータ | `lcb_coef` | `n_bootstrap`, `alpha` |
 | 計算コスト | O(n) | O(n * B) |

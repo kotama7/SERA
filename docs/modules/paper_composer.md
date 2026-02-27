@@ -332,8 +332,10 @@ Markdown 形式の論文を LaTeX に変換するクラス。
 ### コンストラクタ
 
 ```python
-def __init__(self)
+def __init__(self, figures_dir: str | Path | None = None)
 ```
+
+- `figures_dir`: 図のディレクトリパス（`None` の場合は `\includegraphics` のパスをそのまま使用）
 
 ### compose(sections, metadata=None) -> str
 
@@ -355,6 +357,6 @@ def __init__(self)
 | `**bold**` | `\textbf{bold}` |
 | `*italic*` | `\textit{italic}` |
 | `` `code` `` | `\texttt{code}` |
-| コードブロック | `\begin{lstlisting}...\end{lstlisting}` |
+| コードブロック | `\begin{verbatim}...\end{verbatim}` |
 | テーブル | `\begin{tabular}...\end{tabular}` |
 | `![caption](path)` | `\begin{figure}...\includegraphics{path}...\end{figure}` |

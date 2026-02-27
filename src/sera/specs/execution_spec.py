@@ -19,7 +19,6 @@ class SearchConfig(BaseModel):
     lambda_cost: float = Field(0.1, description="Cost penalty coefficient in priority")
     beta_exploration: float = Field(0.05, description="Exploration bonus coefficient")
     sibling_context_k: int = Field(5, description="Number of sibling nodes in improve context")
-    squash_depth: int | None = Field(None, description="Squash depth for lineage snapshots (default: max_depth // 2)")
     strategy: str = Field("best_first", description="Search algorithm name")
     priority_rule: str = Field("epsilon_constraint_lcb", description="Priority computation rule")
     slurm_batch_size: int = Field(5, description="Number of SLURM jobs to submit per batch")

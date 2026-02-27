@@ -92,11 +92,15 @@ def __init__(
 
 ### _should_terminate() -> bool
 
-終了条件の判定。
+終了条件の判定。以下のいずれかが成立すると `True` を返す:
 
-- `step >= max_steps`（デフォルトは `max_nodes`、100）
-- `len(all_nodes) >= max_nodes`（デフォルト 100）
-- `open_list` が空で、pending ノードもデバッグ可能ノードも拡張可能ノードもない場合
+1. `len(all_nodes) < min_nodes_before_stop`（デフォルト 10）の場合は常に `False`（早期終了を防止）
+2. `step >= max_steps`（デフォルトは `max_nodes`、100）
+3. `len(all_nodes) >= max_nodes`（デフォルト 100）
+4. `max_wall_time_hours` 経過（経過時間をモノトニッククロックで計測）
+5. プラトー検出: `stop_on_plateau`（デフォルト `True`）が有効かつ `plateau_patience`（デフォルト 10）ステップ間に `plateau_min_improvement`（デフォルト 0.001）以上の改善がない場合
+6. 予算超過: `pruning.budget_limit.limit` が設定されており、全ノードの `total_cost` 合計が上限を超えた場合（`_budget_exceeded` フラグを設定）
+7. `open_list` が空で、pending ノードもデバッグ可能ノードも拡張可能ノードもない場合
 
 ### _evaluate_node(node)
 
@@ -141,6 +145,27 @@ def sync_adapter_assignment(
 1. ルートノード (`parent_id is None`) → `adapter_node_id = "adapter_root"`
 2. PPO更新あり (`ppo_updated=True`, `new_adapter_node_id` 非 None) → 新しい ID を割り当て
 3. それ以外 → 親の `adapter_node_id` を継承
+
+### _build_tool_trajectory(loop_result) -> list[dict]
+
+`AgentLoopResult` からツール使用軌跡を構築するメソッド。`PPORolloutV3` の `tool_trajectory` フィールドに格納される。各ツール呼び出しの `tool_name`, `success`, `wall_time_sec` を記録する。
+
+### _run_post_step_tasks(exec_spec)
+
+ステップ後のPPO更新・プルーニング・チェックポイントを実行する非同期メソッド。メインループの各ステップ終了時に呼び出される。
+
+### _run_batched_pipeline(batch_size, max_concurrent, poll_interval_sec)
+
+SLURM 非同期バッチパイプライン。`SlurmExecutor` 使用時に複数の pending ノードを一括処理する非同期メソッド。
+
+1. `open_list` から `batch_size` 個の pending ノードを収集
+2. 実験コード生成（`ExperimentGenerator`）
+3. ジョブ一括投入 → 非同期ポーリング → 結果収集
+4. 各ノードの評価・PPOバッファへの追加
+
+### _needs_diversity_draft(exec_spec) -> bool
+
+多様性ドラフトが必要かどうかを判定するメソッド。評価済みノード中のユニークメソッド数が `min_diverse_methods` 未満かつ評価済みノード数が `draft_trigger_after` 以上の場合に `True` を返す。
 
 ### save_state() / load_state(state)
 
@@ -198,8 +223,10 @@ AIDE 着想の分岐オペレータ（draft, debug, improve）を実装するク
 ### コンストラクタ
 
 ```python
-def __init__(self, specs, agent_llm, rng=None)
+def __init__(self, specs, agent_llm, rng=None, agent_loop=None)
 ```
+
+- `agent_loop`: `AgentLoop` インスタンス（`None` 可）。ツールバインディングが設定された関数（`function_tool_bindings` に登録済み）の場合に ReAct ループで実行される
 
 ### draft(n, all_nodes=None) -> list[SearchNode]
 

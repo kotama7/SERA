@@ -208,6 +208,7 @@ flowchart TD
 
 1. **ツール存在チェック**: `function_tool_bindings` の各ツールが `available_tools` のいずれかのカテゴリに存在するか
 2. **Phase ツール整合性チェック**: 関数にバインドされたツールが、その関数が属する Phase の `phase_tool_map` のサブセットであるか
+3. **関数登録チェック**: `available_functions` に定義された関数が `REGISTRY` に登録されているか（ソフトチェック）
 
 いずれも警告ログの出力のみでプロセスは継続する。
 
@@ -311,10 +312,13 @@ priority = lcb - lambda_cost * total_cost + beta_exploration * (1 / sqrt(eval_ru
 
 | 条件 | デフォルト値 | 説明 |
 |------|------------|------|
+| `min_nodes_before_stop` 未満 | 10 | この値未満のノード数では終了しない（早期終了防止） |
 | `max_nodes` 到達 | 100 | 探索木のノード総数が上限に達した |
 | `max_steps` 到達 | `max_nodes` と同値 | ステップ数が上限に達した |
+| `max_wall_time_hours` 超過 | 4.0 | 実時間が上限を超えた |
+| `stop_on_plateau` | `True`（有効） | `plateau_patience (10)` ステップ間に `plateau_min_improvement (0.001)` 以上の改善がない場合に停止 |
+| 予算超過 | -- | `pruning.budget_limit.limit` 設定時、全ノードの `total_cost` 合計が上限を超えた場合 |
 | 処理可能ノードなし | -- | pending, debuggable, expandable なノードがすべてなくなった |
-| `stop_on_plateau` | `False`（無効） | `plateau_patience (10)` ステップ改善なしで停止 |
 
 ### SIGINT ハンドリング
 
@@ -801,20 +805,36 @@ flowchart TD
 ```mermaid
 flowchart TD
     START[開始] --> VERIFY["SpecFreezer.verify()<br/>ExecutionSpec 整合性確認"]
-    VERIFY -->|不一致| EXIT2["exit(2)"]
+    VERIFY -->|不一致| EXIT2["exit(2): spec改竄"]
     VERIFY -->|OK| LOAD[AllSpecs ロード]
-    LOAD --> INIT["コンポーネント初期化<br/>AgentLLM, Executor,<br/>Evaluator, TreeOps,<br/>PPOTrainer, Pruner,<br/>TurnRewardEvaluator,<br/>FailureKnowledgeExtractor"]
+    LOAD --> HASH{"adapter_spec_hash<br/>整合性チェック"}
+    HASH -->|不一致| EXIT3["exit(3): アダプタ互換性エラー"]
+    HASH -->|OK| INIT["コンポーネント初期化<br/>AgentLLM, Executor,<br/>Evaluator, TreeOps,<br/>PPOTrainer, Pruner,<br/>TurnRewardEvaluator,<br/>FailureKnowledgeExtractor"]
     INIT --> RESUME{--resume?}
     RESUME -->|はい| RESTORE[チェックポイント復元]
     RESUME -->|いいえ| RUN
     RESTORE --> RUN
-    RUN["SearchManager.run()"] --> BEST{最良ノードあり?}
+    RUN["SearchManager.run()"] --> BUDGET{予算超過?}
+    BUDGET -->|"はい & ノードなし"| EXIT12["exit(12): 予算超過"]
+    BUDGET -->|いいえ| BEST{最良ノードあり?}
     BEST -->|はい| EXPORT["export-best"]
-    BEST -->|いいえ| EXIT11["exit(11)"]
+    BEST -->|いいえ| EXIT11["exit(11): 有効ノードなし"]
     EXPORT --> PAPER["Phase 7: generate-paper"]
     PAPER --> EVAL["Phase 8: evaluate-paper"]
     EVAL --> DONE[完了]
 ```
+
+### 終了コード（`sera research`）
+
+| コード | 意味 |
+|-------|------|
+| `0` | 正常終了 |
+| `1` | Spec ロードエラー |
+| `2` | ExecutionSpec 改竄検知 |
+| `3` | adapter_spec_hash 不一致（LoRA 互換性エラー） |
+| `11` | 研究完了したが有効ノードなし |
+| `12` | 予算超過 |
+| `20` | SIGINT によるグレースフル停止 |
 
 ### チェックポイント
 

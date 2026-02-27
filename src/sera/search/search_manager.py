@@ -361,12 +361,12 @@ class SearchManager:
                         if nid in self.all_nodes and nid not in self.closed_set
                     ]
                     workspace_dir = self.checkpoint_dir.parent if self.checkpoint_dir else None
-                    pruned_ids = self.pruner.prune(
+                    pruned_nodes = self.pruner.prune(
                         open_nodes, self.closed_set, self.all_nodes, exec_spec,
                         workspace_dir=workspace_dir,
                     )
-                    if pruned_ids:
-                        pruned_set = set(pruned_ids)
+                    if pruned_nodes:
+                        pruned_set = {getattr(n, "node_id", n) for n in pruned_nodes}
                         self.open_list = [(p, nid) for p, nid in self.open_list if nid not in pruned_set]
                         self.closed_set.update(pruned_set)
                 except Exception as e:
@@ -788,12 +788,12 @@ class SearchManager:
                     if nid in self.all_nodes and nid not in self.closed_set
                 ]
                 workspace_dir = self.checkpoint_dir.parent if self.checkpoint_dir else None
-                pruned_ids = self.pruner.prune(
+                pruned_nodes = self.pruner.prune(
                     open_nodes, self.closed_set, self.all_nodes, exec_spec,
                     workspace_dir=workspace_dir,
                 )
-                if pruned_ids:
-                    pruned_set = set(pruned_ids)
+                if pruned_nodes:
+                    pruned_set = {getattr(n, "node_id", n) for n in pruned_nodes}
                     self.open_list = [(p, nid) for p, nid in self.open_list if nid not in pruned_set]
                     self.closed_set.update(pruned_set)
             except Exception as e:

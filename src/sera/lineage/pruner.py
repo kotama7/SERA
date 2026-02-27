@@ -36,8 +36,8 @@ class Pruner:
         all_nodes: dict[str, Any],
         exec_spec: Any,
         workspace_dir: Path | None = None,
-    ) -> list[str]:
-        """Run all pruning passes and return the ids of pruned nodes.
+    ) -> list[Any]:
+        """Run all pruning passes and return pruned nodes.
 
         The pruned nodes have their ``status`` set to ``"pruned"``.
 
@@ -102,7 +102,7 @@ class Pruner:
         if pruned_ids:
             logger.info("Pruned %d nodes: %s", len(pruned_ids), pruned_ids)
 
-        return pruned_ids
+        return [all_nodes[nid] for nid in pruned_ids if nid in all_nodes]
 
     # ------------------------------------------------------------------
     # Protection list

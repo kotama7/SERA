@@ -65,13 +65,53 @@ def detect_slurm() -> dict[str, Any]:
     return result
 
 
-def detect_environment() -> dict[str, Any]:
-    """Auto-detect GPU and SLURM availability.
+def detect_cpu_memory() -> dict[str, Any]:
+    """Detect CPU core count and system memory.
 
     Returns:
-        Combined dict with GPU and SLURM detection results.
+        Dict with ``cpu_cores`` (int) and ``system_memory_gb`` (float).
     """
+    import os
+
+    result: dict[str, Any] = {
+        "cpu_cores": os.cpu_count() or 1,
+        "system_memory_gb": 0.0,
+    }
+
+    try:
+        import psutil
+
+        result["system_memory_gb"] = round(psutil.virtual_memory().total / (1024**3), 1)
+    except ImportError:
+        # psutil not installed; try /proc/meminfo on Linux
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        result["system_memory_gb"] = round(kb / (1024**2), 1)
+                        break
+        except Exception:
+            pass
+
+    return result
+
+
+def detect_environment() -> dict[str, Any]:
+    """Auto-detect GPU, SLURM, CPU, and memory availability.
+
+    Returns:
+        Combined dict with GPU, SLURM, CPU, and memory detection results.
+    """
+    import os
+
     env: dict[str, Any] = {}
     env.update(detect_gpu())
     env.update(detect_slurm())
+    env.update(detect_cpu_memory())
+
+    # Read SLURM env vars if available
+    env["slurm_partition"] = os.environ.get("SLURM_PARTITION", "")
+    env["slurm_account"] = os.environ.get("SLURM_ACCOUNT", "")
+
     return env

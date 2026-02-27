@@ -131,7 +131,7 @@ LoRA アダプタの PPO オンライン学習に関する設定です。
 | `target_score` | `float \| None` | `None` | このスコア達成で停止（None は無効） |
 | `min_improvement` | `float` | `0.001` | 進捗とみなす最小改善量 |
 | `max_steps` | `int \| None` | `None` | 最大探索ステップ数（None の場合は `max_nodes` を使用） |
-| `stop_on_plateau` | `bool` | `False` | プラトーで停止するか |
+| `stop_on_plateau` | `bool` | `True` | プラトーで停止するか |
 | `plateau_patience` | `int` | `10` | プラトー停止前の改善なしステップ数 |
 | `plateau_min_improvement` | `float` | `0.001` | プラトーカウンタをリセットする最小改善量 |
 | `min_nodes_before_stop` | `int` | `10` | 終了を許可する前の最小ノード数 |
@@ -523,6 +523,7 @@ hiper:
 
 1. **ツール存在チェック**: `function_tool_bindings` で参照されるツールが `available_tools` に存在するか
 2. **Phase ツール整合性チェック**: 関数にバインドされたツールが、その関数の Phase に対応する `phase_tool_map` のサブセットであるか
+3. **関数登録チェック**: `available_functions` に定義された関数が `REGISTRY` に登録されているか（ソフトチェック）
 
 いずれも警告ログの出力のみで、プロセスは継続します。
 

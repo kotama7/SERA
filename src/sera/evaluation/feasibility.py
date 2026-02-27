@@ -58,11 +58,21 @@ def check_feasibility(node: Any, problem_spec: Any) -> bool:
         for metric in node.metrics_raw:
             if not isinstance(metric, dict):
                 continue
-            if c_name not in metric:
+
+            # Try flat key lookup first (e.g. metric["format_valid"])
+            value = None
+            if c_name in metric:
+                value = metric[c_name]
+            elif "constraints" in metric and isinstance(metric["constraints"], list):
+                # Support nested constraints array: [{"name": "...", "value": ...}, ...]
+                for entry in metric["constraints"]:
+                    if isinstance(entry, dict) and entry.get("name") == c_name:
+                        value = entry.get("value")
+                        break
+
+            if value is None:
                 # Constraint metric not reported; skip (assume satisfied)
                 continue
-
-            value = metric[c_name]
 
             if c_type == "bool":
                 if not bool(value):

@@ -74,13 +74,11 @@ def run_generate_paper(work_dir: str) -> None:
             provider=specs.model.vlm.provider,
         )
 
-    # Setup citation searcher
-    from sera.paper.citation_searcher import CitationSearcher
+    # Setup Semantic Scholar client for citation search
     from sera.phase0.api_clients.semantic_scholar import SemanticScholarClient
     import os
 
     ss_client = SemanticScholarClient(api_key=os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
-    citation_searcher = CitationSearcher(ss_client, agent_llm)
 
     # Compose paper
     paper_dir = workspace / "paper"
@@ -93,6 +91,24 @@ def run_generate_paper(work_dir: str) -> None:
         log_dir=log_dir,
     )
 
+    # Setup ablation runner if auto_ablation is enabled
+    ablation_runner = None
+    if getattr(specs.execution.paper, "auto_ablation", False) and evidence.best_node:
+        try:
+            from sera.execution.ablation import AblationRunner
+            from sera.execution import create_executor
+
+            executor = create_executor(specs.resource, specs.execution)
+            ablation_runner = AblationRunner(
+                executor=executor,
+                experiment_generator=None,
+                problem_spec=specs.problem,
+                execution_spec=specs.execution,
+                base_seed=42,
+            )
+        except Exception as e:
+            console.print(f"[yellow]Auto-ablation setup failed: {e}[/yellow]")
+
     console.print("[cyan]Generating paper (Phase 7)...[/cyan]")
     paper = asyncio.run(
         composer.compose(
@@ -102,6 +118,7 @@ def run_generate_paper(work_dir: str) -> None:
             agent_llm,
             vlm,
             semantic_scholar_client=ss_client,
+            ablation_runner=ablation_runner,
         )
     )
 
@@ -116,12 +133,13 @@ def run_generate_paper(work_dir: str) -> None:
                     # Format dict entries as BibTeX
                     key = entry.get("citation_key", "unknown")
                     f.write(f"@article{{{key},\n")
-                    for field in ("title", "author", "year", "journal", "doi"):
-                        if entry.get(field):
-                            val = entry[field]
+                    for field in ("title", "authors", "year", "journal", "doi"):
+                        val = entry.get(field)
+                        if val:
+                            bib_field = "author" if field == "authors" else field
                             if isinstance(val, list):
                                 val = " and ".join(val)
-                            f.write(f"  {field} = {{{val}}},\n")
+                            f.write(f"  {bib_field} = {{{val}}},\n")
                     f.write("}\n\n")
                 else:
                     f.write(str(entry) + "\n\n")

@@ -42,8 +42,8 @@ def __init__(self, exec_spec, model_spec, lineage_manager, log_path: Path, plan_
 |-----------|----------|------|
 | `clip_range` | 0.2 | PPO クリッピング範囲 |
 | `lr` | 1e-4 | AdamW 学習率 |
-| `batch_size` | 4 | バッチサイズ |
-| `mini_batch_size` | 2 | ミニバッチサイズ |
+| `batch_size` | 16 | バッチサイズ |
+| `mini_batch_size` | 4 | ミニバッチサイズ |
 | `epochs_per_update` | 4 | 1 更新あたりのエポック数 |
 | `gamma` | 0.99 | 割引率 |
 | `gae_lambda` | 0.95 | GAE のラムダ |
@@ -51,17 +51,18 @@ def __init__(self, exec_spec, model_spec, lineage_manager, log_path: Path, plan_
 | `kl_coef` | 0.01 | KL ペナルティ係数 |
 | `kl_target` | 0.01 | KL ターゲット値 |
 | `entropy_coef` | 0.01 | エントロピーボーナス係数 |
-| `max_grad_norm` | 1.0 | 勾配クリッピングの最大ノルム |
+| `max_grad_norm` | 0.5 | 勾配クリッピングの最大ノルム |
 | `value_loss_coef` | 0.5 | 価値関数ロスの係数 |
 | `ppo_trigger_interval` | 5 | PPO 更新トリガー間隔 |
 
-### should_update(n_evaluated) -> bool
+### should_update(n_evaluated, evaluated_nodes=None) -> bool
 
 PPO 更新をトリガーすべきか判定する。
 
 | 条件 | 結果 |
 |------|------|
 | `n_evaluated < 2` | `False` |
+| `evaluated_nodes` all constraint-violated | `False`（有効な報酬信号なし） |
 | `n_evaluated % ppo_trigger_interval == 0` | `True` |
 | `_steps_since_improvement >= plateau_patience` | `True`（プラトー検知） |
 
@@ -74,28 +75,32 @@ PPO 更新をトリガーすべきか判定する。
 - `current_best_lcb > _best_lcb` の場合: `_best_lcb` を更新し `_steps_since_improvement = 0`
 - そうでない場合: `_steps_since_improvement += 1`
 
-### update(rollouts, agent_llm, specs) -> dict
+### update(rollouts, agent_llm, specs, all_nodes=None) -> dict
 
 PPO 更新サイクルを 1 回実行する非同期メソッド。
 
 - `_mock_fn` が設定されている場合はそれを呼び出し、結果をログに記録して返す
 - そうでない場合は `_ppo_update_impl()` を実行
+- `all_nodes` は探索木ノードの辞書で、親アダプタ ID の解決に使用される
 
-**戻り値:** `mean_reward`, `kl_divergence`, `policy_loss`, `value_loss`, `entropy`, `delta_norm_l2`, `kl_coef_current` を含む dict。
+**戻り値:** `mean_reward`, `kl_divergence`, `policy_loss`, `value_loss`, `entropy`, `delta_norm_l2`, `kl_coef_current`, `new_adapter_node_id`, `turn_rewards`（ロールアウト全体の平均ターン報酬、PPORolloutV2 インスタンスから収集）を含む dict。
 
-### _compute_advantages_for_method(rollouts, turn_rewards_map)
+### _compute_advantages_for_method(rollouts)
 
-報酬手法（`plan_spec.reward.method`）に応じた Advantage 計算のルーティングを行う。
+報酬手法（`plan_spec.reward.method`）に応じた Advantage 計算のルーティングを行う。`turn_rewards_map` は内部で PPORolloutV2 インスタンスから構築される。
 
 | メソッド | 処理 |
 |---------|------|
 | `hiper` | `HierarchicalAdvantageEstimator.compute_hierarchical_advantages()` を使用。3 層（switch/high/low level）の階層的 Advantage 分解を実行 |
+| `tool_aware` | `compute_reward_tool_aware`（`sera.learning.tool_usage_learning`）を使用して PPORolloutV3 のツール呼び出し記録に基づき報酬を調整した後、`_compute_gae` を実行 |
 | `mt_grpo` | 従来の `_compute_gae`（報酬値にターン報酬が反映済み） |
 | `outcome_rm`（デフォルト） | 従来の `_compute_gae` |
 
 `plan_spec` が `None` の場合は常に `_compute_gae` にフォールバックする。
 
 ### _ppo_update_impl (実際の PPO 実装)
+
+`_ppo_update_impl` は `_ppo_update_core` を OOM リトライロジックでラップする。GPU OOM エラーが発生した場合、最大 2 回リトライし、リトライごとに `batch_size` を半減させ、`torch.cuda.empty_cache()` を呼び出してメモリを解放する。
 
 **処理フロー:**
 
@@ -104,20 +109,21 @@ PPO 更新サイクルを 1 回実行する非同期メソッド。
 3. **Advantage 計算**: `_compute_advantages_for_method()` を呼び出し、手法に応じた Advantage を計算
    - `outcome_rm` / `mt_grpo`: `_compute_gae` で単一ステップエピソードとして処理（`advantage = reward - value`, `returns = reward`）
    - `hiper`: `HierarchicalAdvantageEstimator` で 3 層階層的 Advantage を計算
-4. **LoRA パラメータの特定**:
+4. **LoRA 互換性検証**: `sera.specs.model_spec` の `validate_lora_compatibility()` を呼び出し、`hidden_size`、`num_attention_heads` 等のモデル構成と LoRA 設定の互換性を検証する。問題がある場合は警告をログに出力する（処理は続行される）。
+5. **LoRA パラメータの特定**:
    ```python
    lora_params = [p for n, p in model.named_parameters()
                   if p.requires_grad and "lora" in n.lower()]
    ```
    LoRA パラメータが見つからない場合はスキップ
-5. **Accelerator と AdamW の準備**:
+6. **Accelerator と AdamW の準備**:
    ```python
    accelerator = Accelerator()
    optimizer = torch.optim.AdamW(lora_params, lr=self.lr)
    model, optimizer = accelerator.prepare(model, optimizer)
    ```
-6. **更新前重みのスナップショット**: `peft.get_peft_model_state_dict()` で取得
-7. **ミニバッチ PPO ループ** (`epochs_per_update` エポック):
+7. **更新前重みのスナップショット**: `peft.get_peft_model_state_dict()` で取得
+8. **ミニバッチ PPO ループ** (`epochs_per_update` エポック):
    - インデックスをランダムシャッフル
    - ミニバッチサイズ `mini_batch_size` で分割
    - 各ミニバッチで:
@@ -133,14 +139,15 @@ PPO 更新サイクルを 1 回実行する非同期メソッド。
      - **価値関数ロス**: `0.5 * MSE(values, returns)`
      - **エントロピー**: `trl.trainer.utils.entropy_from_logits(logits)` を使用
      - **総合ロス**: `policy_loss + value_loss_coef * value_loss - entropy_coef * entropy`
+     - **NaN/Inf 検出**: ロス値が NaN または Inf の場合、警告をログに出力し、そのミニバッチの更新をスキップする
      - 勾配クリッピング: `accelerator.clip_grad_norm_(lora_params, max_grad_norm)`
-8. **デルタノルムの計算**: `delta_norm_L2 = sqrt(sum((post[k] - pre[k]).norm()^2 for k in pre))`
-8b. **アダプタデルタの永続化**: `lineage_manager` が存在し `delta_norm > 0` の場合、`lineage_manager.save_delta()` で新しいアダプタノードとしてデルタを保存する。`new_adapter_node_id`（UUID4）が生成され、結果辞書に含まれて返される。これにより `SearchManager` がデュアルツリー同期を行える。
-9. **適応 KL 係数の調整**:
+9. **デルタノルムの計算**: `delta_norm_L2 = sqrt(sum((post[k] - pre[k]).norm()^2 for k in pre))`
+9b. **アダプタデルタの永続化**: `lineage_manager` が存在し `delta_norm > 0` の場合、`lineage_manager.save_delta()` で新しいアダプタノードとしてデルタを保存する。`new_adapter_node_id`（UUID4）が生成され、結果辞書に含まれて返される。これにより `SearchManager` がデュアルツリー同期を行える。
+10. **適応 KL 係数の調整**:
    - `mean_kl > kl_target * 1.5` の場合: `kl_coef *= 2.0`
    - `mean_kl < kl_target / 1.5` の場合: `kl_coef /= 2.0`
-10. **vLLM エンジンのウェイク**: `finally` ブロックで `.wake()` を呼び出す
-11. **ログ出力**: `ppo_log.jsonl` に結果を記録
+11. **vLLM エンジンのウェイク**: `finally` ブロックで `.wake()` を呼び出す
+12. **ログ出力**: `ppo_log.jsonl` に結果を記録
 
 ### set_mock(fn)
 

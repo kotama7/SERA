@@ -75,7 +75,12 @@ Phase 0 パイプライン全体を実行する非同期メソッド。
 **処理フロー:**
 
 1. **クエリ生成** (`_build_queries`):
-   - LLM が利用可能な場合: Input-1 の task, domain, goal から 3 つの多様な検索クエリを生成するよう LLM に依頼。応答を改行で分割してクエリリストを取得
+   - LLM が利用可能な場合: Input-1 の task, domain, goal から 3〜5 つの検索クエリを 5 カテゴリから生成するよう LLM に依頼。応答を改行で分割してクエリリストを取得
+     - Main query: core research topic
+     - Method query: methods/techniques
+     - Baseline query: established baselines/benchmarks
+     - Application query (optional): real-world applications
+     - Survey query (optional): surveys/reviews
    - LLM が利用不可または失敗時: フォールバックヒューリスティック `"{task_brief} {field}"` + `" {subfield}"` を使用
 
 2. **検索** (`_search_with_fallback`):
@@ -92,6 +97,11 @@ Phase 0 パイプライン全体を実行する非同期メソッド。
    - `citation_graph_depth > 0` の場合に実行
    - 上位 `top_k_papers` 件の論文に対して、各クライアントで `get_references()` と `get_citations()` を呼び出し
    - 結果を追加した後、再度重複排除
+
+4b. **関連性スコア割り当て** (`_assign_relevance_scores`):
+   - Input-1 のフィールド（brief, field, subfield, objective）からキーワードを抽出
+   - 各論文のタイトル+アブストラクトとのキーワードオーバーラップで relevance_score を [0, 1] の範囲で計算
+   - デフォルトスコア（0.5）を持つ論文のみ上書き
 
 5. **ランキング** (`rank_papers`):
    - `ranking_weight = citation_weight` でランキングスコアを計算
@@ -133,8 +143,9 @@ LLM が利用不可または失敗した場合はデフォルト値（`role="str
 | フィールド | 型 | 説明 |
 |-----------|-----|------|
 | `baseline_candidates` | `list[BaselineCandidate]` | 被引用数上位 5 件の論文を構造化データとして保持 |
-| `common_metrics` | `list[str]` | `input1.goal.metric` から抽出された主要メトリクス名のリスト |
-| `open_problems` | `list[OpenProblem]` | クラスタの `description` から抽出された未解決問題を構造化データとして保持 |
+| `common_metrics` | `list[dict]` | `input1.goal` から抽出された主要メトリクスの構造化リスト（各要素に `name`, `description`, `scale`, `higher_is_better` フィールド） |
+| `common_datasets` | `list[dict]` | 論文アブストラクトから抽出されたデータセット名のリスト（各要素に `name`, `mention_count` フィールド） |
+| `open_problems` | `list[OpenProblem]` | LLM またはクラスタの `description` から抽出された未解決問題を構造化データとして保持 |
 
 **BaselineCandidate** (dataclass):
 
@@ -142,7 +153,7 @@ LLM が利用不可または失敗した場合はデフォルト値（`role="str
 |-----------|-----|------|
 | `name` | `str` | 論文タイトル |
 | `paper_id` | `str` | 論文 ID |
-| `reported_metric` | `str` | 報告されたメトリクス名（`input1.goal.metric` から取得） |
+| `reported_metric` | `dict` | 報告されたメトリクスの構造化データ (`name`, `value`, `scale` フィールドを持つ dict) |
 | `method_summary` | `str` | アブストラクトの先頭 200 文字 |
 
 **OpenProblem** (dataclass):
@@ -152,6 +163,8 @@ LLM が利用不可または失敗した場合はデフォルト値（`role="str
 | `description` | `str` | クラスタの説明文 |
 | `related_paper_ids` | `list[str]` | 関連する論文 ID のリスト |
 | `severity` | `str` | 深刻度（デフォルト `"medium"`） |
+
+**open_problems の抽出**: open_problems はまず LLM ベースの抽出 (`_extract_open_problems`) を試みる。LLM は上位 15 件の論文のタイトル・アブストラクトを分析し、3〜5 件の未解決問題を severity レベル (`low`/`medium`/`high`) 付きで返す。LLM が利用不可またはパース失敗時は、クラスタの description からフォールバックとして生成される。
 
 これらは Phase 2 のルートドラフト生成時にプロンプトへ注入され、`baseline`/`open_problem`/`novel` カテゴリ分割に活用される。
 

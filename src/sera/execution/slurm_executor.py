@@ -243,7 +243,7 @@ class SlurmExecutor(Executor):
             interpreter,
             script_abs,
             seed,
-            str(artifacts_dir),
+            str(run_dir),
             self.slurm_config.modules,
             seed_fmt,
         )
@@ -427,7 +427,7 @@ class SlurmExecutor(Executor):
             interpreter,
             script_abs,
             seed,
-            str(artifacts_dir),
+            str(run_dir),
             self.slurm_config.modules,
             seed_fmt,
         )
@@ -710,17 +710,39 @@ class SlurmExecutor(Executor):
                 statuses.append("UNKNOWN")
         return statuses
 
-    async def wait_all(self, handles: list[SlurmJobHandle | dict], timeout_sec: float | None = None) -> list[str]:
-        """Wait until all jobs finish or timeout, return final statuses."""
+    async def wait_all(self, handles: list[SlurmJobHandle | dict], timeout_sec: float | None = None) -> list[RunResult]:
+        """Wait until all jobs finish or timeout, return RunResults."""
         start = time.monotonic()
         while True:
             statuses = self.poll_jobs(handles)
             terminal = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "UNKNOWN"}
             if all(s in terminal for s in statuses):
-                return statuses
+                break
             if timeout_sec is not None and (time.monotonic() - start) >= timeout_sec:
-                return statuses
+                break
             await asyncio.sleep(self.poll_interval_sec)
+
+        results: list[RunResult] = []
+        for h in handles:
+            if isinstance(h, SlurmJobHandle):
+                result = await self.collect_result(
+                    node_id=h.node_id,
+                    job=h.job,
+                    start_time=h.start_time,
+                    timeout_sec=None,
+                    run_dir=h.run_dir if hasattr(h, "run_dir") else None,
+                    seed=h.seed,
+                )
+            else:
+                result = await self.collect_result(
+                    node_id=h.get("node_id", "unknown"),
+                    job=h["job"],
+                    start_time=h.get("start_time", time.monotonic()),
+                    timeout_sec=None,
+                    seed=h.get("seed", 0),
+                )
+            results.append(result)
+        return results
 
     async def _async_poll_job(self, job: Any, timeout_sec: int | None, start_time: float) -> int:
         """Async version of _poll_job using asyncio.sleep for polling.

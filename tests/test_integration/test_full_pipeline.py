@@ -265,7 +265,8 @@ class TestLineageComponents:
 
         # Best node should never be pruned
         best_id = "node-9"
-        assert best_id not in set(pruned)
+        pruned_ids = {n.node_id for n in pruned}
+        assert best_id not in pruned_ids
 
 
 class TestEvidenceStore:

@@ -253,6 +253,13 @@ class AgentLoop:
             status = "success" if tr.success else "error"
             parts.append(f"[{i}] {tr.tool_name} (call_id: {tr.call_id[:8]})")
             parts.append(f"  Status: {status}")
+            if tr.is_execution:
+                if tr.stdout_preview:
+                    parts.append(f"  --- stdout (last 20 lines) ---")
+                    parts.append(f"{self._indent(tr.stdout_preview, 4)}")
+                if tr.stderr_preview:
+                    parts.append(f"  --- stderr (last 10 lines) ---")
+                    parts.append(f"{self._indent(tr.stderr_preview, 4)}")
             if tr.success and tr.output is not None:
                 output_str = self._format_output(tr.output)
                 parts.append(f"  Output:\n{self._indent(output_str, 4)}")

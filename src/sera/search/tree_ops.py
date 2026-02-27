@@ -444,8 +444,17 @@ class TreeOps:
                         logger.warning("Improve attempt %d failed: %s", attempt + 1, e)
 
         if not proposals:
-            logger.warning("All improve attempts failed, returning empty list")
-            return []
+            logger.warning("All improve attempts failed, returning fallback node copying parent config")
+            fallback = SearchNode(
+                parent_id=parent.node_id,
+                depth=parent.depth + 1,
+                hypothesis=parent.hypothesis,
+                experiment_config=parent.experiment_config,
+                experiment_code=parent.experiment_code,
+                branching_op="improve",
+                rationale="Improve: LLM failed to generate proposals, copying parent config",
+            )
+            return [fallback]
 
         nodes: list[SearchNode] = []
         for proposal in proposals[:n_children]:

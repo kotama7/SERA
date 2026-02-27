@@ -213,8 +213,8 @@ class LineageManager:
     def maybe_squash(self, exec_spec: Any, top_k_ids: set[str] | None = None) -> list[str]:
         """Create snapshots for nodes that are deeper than the squash threshold.
 
-        The squash threshold is read from ``lora_runtime.squash_depth`` first
-        (default 6), falling back to ``search.squash_depth``.
+        The squash threshold is read from ``lora_runtime.squash_depth``
+        (default 6).
 
         Parameters
         ----------
@@ -230,12 +230,7 @@ class LineageManager:
             List of adapter_node_ids that were squashed.
         """
         lora_cfg = getattr(exec_spec, "lora_runtime", None)
-        squash_threshold = getattr(lora_cfg, "squash_depth", None) if lora_cfg else None
-        if squash_threshold is None:
-            search_cfg = getattr(exec_spec, "search", None)
-            squash_threshold = getattr(search_cfg, "squash_depth", None) if search_cfg else None
-        if squash_threshold is None:
-            squash_threshold = 6
+        squash_threshold = getattr(lora_cfg, "squash_depth", 6) if lora_cfg else 6
 
         snapshot_on_topk = getattr(lora_cfg, "snapshot_on_topk", True) if lora_cfg else True
 

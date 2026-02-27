@@ -202,11 +202,12 @@ def run_research(
 
     # PPO and lineage disabled for lightweight runs (require local GPU model)
     learning_enabled = getattr(specs.execution.learning, "enabled", True)
+    provider = getattr(specs.model.agent_llm, "provider", "openai") if specs.model.agent_llm else "openai"
     ppo_trainer = None
     lineage_manager = None
     pruner = None
 
-    if learning_enabled:
+    if learning_enabled and provider == "local":
         try:
             from sera.lineage.lineage_manager import LineageManager
             from sera.lineage.pruner import Pruner

@@ -32,7 +32,7 @@ lineage/
     <adapter_node_id>/
       meta.json                      # メタデータ
       adapter_delta.safetensors      # 親からのデルタ
-      adapter_snapshot.safetensors   # 完全な重み（スナップショット、任意）
+      snapshot.safetensors           # 完全な重み（スナップショット、任意）
 ```
 
 ### コンストラクタ
@@ -59,13 +59,15 @@ def __init__(self, lineage_dir: Path, cache_size: int = 10)
 ```json
 {
   "adapter_node_id": "...",
-  "parent_id": "...",
+  "parent_adapter_node_id": "...",
   "search_node_id": "...",
   "depth": 3,
   "adapter_spec_hash": "sha256:...",
   "is_snapshot": false,
   "tensor_names": ["lora_A.weight", "lora_B.weight", ...],
-  "tensor_shapes": {"lora_A.weight": [16, 4096], ...}
+  "tensor_shapes": {"lora_A.weight": [16, 4096], ...},
+  "delta_norm_l2": 0.0123,
+  "created_at": "2026-02-26T12:00:00+00:00"
 }
 ```
 
@@ -77,18 +79,20 @@ def __init__(self, lineage_dir: Path, cache_size: int = 10)
 
 1. LRU キャッシュを確認（ヒットすればそのまま返す）
 2. `build_lineage_path()` でルートからノードまでのパスを構築
-3. パス内で最も深いスナップショットを検索
-4. スナップショットがある場合: そこから開始して残りのデルタを加算
-5. スナップショットがない場合: ルートから全デルタを加算
-6. 結果をキャッシュに格納して返す
+3. パス内の中間祖先ノードについて LRU キャッシュを逆順に検索（キャッシュ済み祖先の最適化）
+4. パス内で最も深いスナップショットを検索
+5. キャッシュ済み祖先とスナップショットのうち、より深い方を開始点として選択し、残りのデルタを加算（親の重みが既にキャッシュされている場合、マテリアライズを最適化する）
+6. どちらもない場合: ルートから全デルタを加算
+7. 結果をキャッシュに格納して返す
 
-### maybe_squash(exec_spec) -> list[str]
+### maybe_squash(exec_spec, top_k_ids=None) -> list[str]
 
 深いノードに対してスナップショットを作成する。
 
-- 閾値: `exec_spec.search.squash_depth`、未設定の場合は `max_depth // 2`（max_depth のデフォルトは 10）
+- 閾値: まず `exec_spec.lora_runtime.squash_depth` を参照し、未設定の場合は `exec_spec.search.squash_depth` にフォールバック、それも未設定の場合はデフォルト `6`
 - `is_snapshot == False` かつ `depth >= squash_threshold` のノードが対象
-- `_create_snapshot()`: `materialize()` で完全な重みを取得し、`adapter_snapshot.safetensors` として保存、`meta.json` の `is_snapshot` を `True` に更新
+- `snapshot_on_topk` ロジック: `lora_runtime.snapshot_on_topk`（デフォルト `True`）が有効な場合、`top_k_ids` に含まれるノードも深さに関係なくスナップショット対象となる
+- `_create_snapshot()`: `materialize()` で完全な重みを取得し、`snapshot.safetensors` として保存、`meta.json` の `is_snapshot` を `True` に更新
 - スナップショットが作成されたノード ID のリストを返す
 
 ### build_lineage_path(adapter_node_id) -> list[str]

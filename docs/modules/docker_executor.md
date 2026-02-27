@@ -33,7 +33,7 @@ def __init__(
 ```
 
 - `work_dir`: ワークスペースディレクトリ。`runs/<node_id>/` がこの下に作成される
-- `docker_config`: Docker 設定オブジェクト（`image`, `volumes`, `environment`, `runtime` 等）
+- `docker_config`: Docker 設定オブジェクト（`image`, `volumes`, `env_vars`, `gpu_runtime` 等）
 - `interpreter_command`: 実験スクリプトのインタープリタ（デフォルト: `"python"`）。多言語サポート用
 - `seed_arg_format`: シード引数のフォーマット（デフォルト: `"--seed {seed}"`）
 - `gpu_enabled`: GPU パススルーの有効化（デフォルト: `True`）
@@ -59,7 +59,7 @@ Docker コンテナ内で実験スクリプトを実行する。
    - OOM 検知: exit_code=-7
    - その他: 失敗として記録
 
-**戻り値:** `RunResult(success, exit_code, stdout_path, stderr_path, metrics_path, wall_time_sec, seed)`
+**戻り値:** `RunResult(node_id, success, exit_code, stdout_path, stderr_path, metrics_path, artifacts_dir, wall_time_sec, seed)`
 
 ### 多言語サポート
 
@@ -112,7 +112,7 @@ _OOM_STDERR_PATTERNS = (
 | Docker イメージ不在 | 自動プル（`_ensure_image`） |
 | タイムアウト | コンテナを graceful stop（10 秒待機）→ force kill |
 | OOM | exit_code=-7 として RunResult を返す |
-| docker パッケージ未インストール | `__init__` で `ImportError`（graceful degradation はなし） |
+| docker パッケージ未インストール | `import docker` は `try/except` でラップされ、失敗時は `_DOCKER_AVAILABLE = False` に設定される。`__init__` で `_DOCKER_AVAILABLE` を確認し、`False` の場合は `ImportError` を送出（`"DockerExecutor requires the 'docker' Python SDK. Install it with: pip install docker"` メッセージ付き） |
 | コンテナ起動失敗 | 例外をそのまま伝搬 |
 
 ### ヘルパー関数

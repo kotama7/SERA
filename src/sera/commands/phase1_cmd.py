@@ -78,7 +78,7 @@ def run_freeze_specs(work_dir: str, auto: bool, cli_args: dict) -> None:
 
     # Apply wizard reward_method and echo_enabled flags to plan_spec
     if "reward_method" in cli_args:
-        plan_spec.reward.primary_source = cli_args["reward_method"]
+        plan_spec.reward.method = cli_args["reward_method"]
     if "echo_enabled" in cli_args:
         plan_spec.echo.enabled = cli_args["echo_enabled"]
 

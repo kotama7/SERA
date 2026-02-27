@@ -180,6 +180,10 @@ sera.agent/
                                     generate_with_tools() (ネイティブtool calling対応)
                                     get_turn_log_probs() (MT-GRPO用Phase別ログ確率)
   agent_functions                 → AgentFunctionRegistry (19個の登録済み関数)
+                                    AgentFunction: frozen dataclass (name, description, parameters,
+                                      return_schema, output_mode, phase, default_temperature,
+                                      max_retries, handler, allowed_tools, loop_config)
+                                    call_function() はプライマリエントリポイント
   agent_loop                      → AgentLoop (ReActループ、max_steps=10, budget=20, timeout=300s)
   tool_executor                   → ToolExecutor (18ツール: SEARCH×6, EXECUTION×3, FILE×5, STATE×4)
   tool_policy                     → ToolPolicy (Phase別ツール許可、書き込みホワイトリスト、レート制限)
@@ -331,6 +335,7 @@ Input-1 YAML (ユーザー入力)
        │
        │  ExecutionSpec整合性検証 (verify → hash不一致でexit code 2)
        │  AllSpecs.load_from_dir()
+       │  adapter_spec_hash整合性検証 (不一致でexit code 3)
        │  コンポーネント初期化 (AgentLLM, Executor, ExperimentGenerator,
        │                        StatisticalEvaluator, TreeOps, SearchManager,
        │                        PPOTrainer, LineageManager, Pruner)
@@ -392,6 +397,13 @@ Input-1 YAML (ユーザー入力)
        │
        └─ export_cmd → outputs/best/
             best_node.json, adapter.safetensors, metrics_summary.json, report.json
+
+  研究ループ終了コード:
+    exit(2)  -- ExecutionSpec改竄検知
+    exit(3)  -- adapter_spec_hashの不一致
+    exit(11) -- 研究完了したが有効ノードなし
+    exit(12) -- 予算超過
+    exit(20) -- SIGINTによるグレースフル停止
 ```
 
 ---
@@ -571,8 +583,8 @@ class Evaluator(ABC):
 
 **構造化出力型**:
 
-- `ToolCall`: `tool_name`, `arguments`, `call_id` を保持するデータクラス
-- `GenerationOutput`: `text`, `tool_calls`, `purpose` を保持するデータクラス
+- `ToolCall`: `tool_name`, `arguments`, `call_id`, `reasoning` を保持するデータクラス
+- `GenerationOutput`: `text`, `tool_calls`, `purpose`, `text_log_prob`, `tool_call_log_probs` を保持するデータクラス
 
 **ツール呼び出し** (`generate_with_tools`):
 
@@ -682,7 +694,11 @@ sera research --resume
 3. `execution_spec.yaml.lock` に格納されたハッシュと比較
 4. 不一致 → `sys.exit(2)` でアボート
 
-### 7.5 学習の無効化
+### 7.5 adapter_spec_hash 整合性検証
+
+`research_cmd.py` は ExecutionSpec 検証の後、`adapter_spec_hash` の整合性もチェックする。LoRA アダプタのスペック（rank, alpha, target_modules 等）のハッシュが lineage ツリー内のメタデータと不一致の場合は `sys.exit(3)` でアボートする。
+
+### 7.6 学習の無効化
 
 `ExecutionSpec.learning.enabled` が `False` の場合、PPOTrainer, LineageManager, Pruner は初期化されない。コンポーネント初期化中の例外もキャッチされ、警告を出力してPPO/Lineageを無効化する。
 

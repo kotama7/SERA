@@ -161,8 +161,8 @@ class TestSquashCreatesSnapshot:
         assert "n1" not in squashed
 
         # Verify snapshot file exists
-        assert (lineage_dir / "nodes" / "n3" / "adapter_snapshot.safetensors").exists()
-        assert (lineage_dir / "nodes" / "n4" / "adapter_snapshot.safetensors").exists()
+        assert (lineage_dir / "nodes" / "n3" / "snapshot.safetensors").exists()
+        assert (lineage_dir / "nodes" / "n4" / "snapshot.safetensors").exists()
 
 
 class TestValidateCompatibility:

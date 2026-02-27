@@ -78,12 +78,14 @@ def __init__(
    - シード導出: `SHA-256(f"{base_seed}:{node_id}:{repeat_idx}") % 2^31`
    - `executor.run(node_id, script_path, seed, timeout_sec)` で実験を実行
    - 成功時: `metrics_path` から JSON を読み込み `node.add_metric(metrics)` で追加
-   - `exit_code == -7`（OOM）: `node.status = "oom"` に設定して早期リターン
+   - 失敗時でも `metrics_path` が存在する場合、部分メトリクスの読み込みを試行する。主要メトリクス（`metric_name`）が欠落している場合は `NaN` を設定する
+   - `exit_code == -7`（OOM）: `node.status = "oom"` に設定し、`node.total_cost` を `execution_spec.pruning.budget_limit` の `limit` 値（取得可能な場合）に、取得不可の場合は `timeout` に設定して早期リターン
+   - `exit_code == -9`（タイムアウト）: `node.status = "timeout"` に設定し、エラーメッセージを記録、`node.total_cost = timeout` に設定して早期リターン
    - その他の失敗: `node.mark_failed(error_msg)` で失敗マークして早期リターン
    - `node.wall_time_sec` に実行時間を加算
 3. `update_stats(node, lcb_coef, metric_name)` で統計量を計算
 4. `check_feasibility(node, problem_spec)` で実行可能性を判定
-5. 評価結果をログ出力
+5. 評価結果をログ出力（`evaluation_complete` イベントには `mu`, `se`, `lcb`, `ucb`, `n_repeats_done`, `feasible`, `wall_time_sec` 等を含む）
 
 ### evaluate_full(node) -- 完全評価
 
@@ -118,11 +120,13 @@ def update_stats(node, lcb_coef=1.96, metric_name="score") -> None
 
 **計算ルール:**
 
-| 条件 | mu | se | lcb |
-|------|-----|-----|------|
-| `metrics_raw` が空 (n=0) | `None` | `None` | `None` |
-| n=1 | `values[0]` | `inf` | `-inf` |
-| n>=2 | `mean(values)` | `sqrt(variance / n)` | `mu - lcb_coef * se` |
+| 条件 | mu | se | lcb | ucb |
+|------|-----|-----|------|------|
+| `metrics_raw` が空 (n=0) | `None` | `None` | `None` | (設定なし) |
+| n=1 | `values[0]` | `inf` | `-inf` | `inf` |
+| n>=2 | `mean(values)` | `sqrt(variance / n)` | `mu - lcb_coef * se` | `mu + lcb_coef * se` |
+
+**出力:** `node.mu`, `node.se`, `node.lcb`, `node.ucb` を直接更新する。
 
 **計算式:**
 
@@ -131,11 +135,12 @@ mu = sum(values) / n
 variance = sum((v - mu)^2 for v in values) / (n - 1)    # 不偏分散
 se = sqrt(variance / n)                                   # 標準誤差
 lcb = mu - lcb_coef * se                                  # 下側信頼限界
+ucb = mu + lcb_coef * se                                  # 上側信頼限界
 ```
 
 **メトリクス値の抽出:**
 
-各 `metrics_raw` エントリから `metric_name` キーの値を `float` として抽出。dict でない場合やキーが存在しない場合、エントリ自体が数値であればそのまま使用。
+`update_stats` はネスト形式とフラット形式の両方をサポートする。各 `metrics_raw` エントリに対して、まず `m["primary"]` キーが dict であり `"value"` を含むかを確認し、該当する場合は `m["primary"]["value"]` を抽出する。該当しない場合は `m[metric_name]` にフォールバックする。dict でない場合やキーが存在しない場合、エントリ自体が数値であればそのまま使用。
 
 **lcb_coef のデフォルト:** 1.96（95% 信頼区間に対応）
 

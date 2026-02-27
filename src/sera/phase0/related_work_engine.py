@@ -546,10 +546,11 @@ class RelatedWorkEngine:
 
         # Extract common metrics mentioned across papers
         common_metrics: list[dict[str, Any]] = []
-        if input1.goal and hasattr(input1.goal, "metric"):
+        metric_name = getattr(input1.goal, "metric", "") if input1.goal else ""
+        if metric_name:
             common_metrics.append(
                 {
-                    "name": input1.goal.metric,
+                    "name": metric_name,
                     "description": "",
                     "scale": "",
                     "higher_is_better": getattr(input1.goal, "direction", "maximize") == "maximize",

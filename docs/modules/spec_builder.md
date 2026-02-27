@@ -29,7 +29,7 @@ LLM を用いて Input-1 と Phase 0 出力から `ProblemSpec` / `PlanSpec` を
 def __init__(self, agent_llm: Any)
 ```
 
-- `agent_llm`: LLM クライアント。`generate(prompt, purpose, temperature)` 非同期メソッドを持つオブジェクト。
+- `agent_llm`: LLM クライアント。`generate(prompt, purpose, temperature)` または `call_function(function_name, prompt, ...)` 非同期メソッドを持つオブジェクト。`call_function` が利用可能な場合は `REGISTRY` に登録された `spec_generation_problem` / `spec_generation_plan` 関数を介してスキーマ検証付きで呼び出す。
 
 ### build_problem_spec(input1, related_work) -> dict
 
@@ -37,8 +37,8 @@ ProblemSpec を LLM で生成する非同期メソッド。
 
 **処理フロー:**
 
-1. `_build_context()` で Input-1 と RelatedWorkSpec を JSON 文字列に変換してコンテキストを構築
-2. `SPEC_GENERATION_PROMPT` テンプレートに `spec_type="ProblemSpec"` とスキーマ説明（`_problem_spec_schema()`）を埋め込む
+1. `_extract_prompt_fields(input1, related_work)` で Input-1 と RelatedWorkSpec から 15 以上のフィールド（`task_brief`, `domain_field`, `objective`, `direction`, `constraints`, `baseline_candidates`, `open_problems` 等）を抽出
+2. プロンプトテンプレートに `spec_type="ProblemSpec"` とスキーマ説明（`_problem_spec_schema()`）を `format_map()` で埋め込む
 3. 最大 3 回リトライ（温度: 0.7, 0.8, 0.9 とインクリメント）
 4. `_parse_json()` で応答から JSON を抽出
 5. パース結果から `parsed.get("problem_spec", parsed)` でスペック部分を取得し、`ProblemSpecModel(**...)` でバリデーション
@@ -88,6 +88,12 @@ CLI 引数から ResourceSpec を構築する同期メソッド。
 CLI 引数から ExecutionSpec を構築する同期メソッド。
 
 - `max_nodes`, `max_depth`, `branch_factor`, `lambda_cost`, `beta`, `repeats`, `lcb_coef`, `no_sequential`, `seq_topk`, `lr`, `clip`, `ppo_steps` を受け取る
+
+### _extract_prompt_fields(input1, related_work) -> dict[str, str]
+
+Input-1 と RelatedWorkSpec からプロンプトテンプレートの変数を抽出するヘルパー。dict / オブジェクト双方に対応（`getattr` + dict `.get()` パターン）。
+
+抽出フィールド例: `task_brief`, `domain_field`, `domain_subfield`, `task_type`, `objective`, `direction`, `baseline`, `data_description`, `data_format`, `data_location`, `constraints`, `notes`, `baseline_candidates`, `open_problems`, `common_metrics` 等。
 
 ### スキーマ説明ヘルパー
 

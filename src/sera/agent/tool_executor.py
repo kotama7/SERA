@@ -35,6 +35,9 @@ class ToolResult:
     error: str | None = None
     wall_time_sec: float = 0.0
     truncated: bool = False
+    stdout_preview: str | None = None
+    stderr_preview: str | None = None
+    is_execution: bool = False
 
 
 # Type alias for handler functions

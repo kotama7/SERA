@@ -6,6 +6,11 @@ from sera.lineage.pruner import Pruner
 from sera.search.search_node import SearchNode
 
 
+def _pruned_ids(pruned: list) -> set[str]:
+    """Extract node_id strings from pruner results."""
+    return {n.node_id for n in pruned}
+
+
 def _make_node(
     node_id: str,
     parent_id: str | None = None,
@@ -62,10 +67,11 @@ class TestProtectionList:
         exec_spec.pruning.reward_threshold = 0.4
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
-        assert "C" in pruned
-        assert "root" not in pruned
-        assert "A" not in pruned
-        assert "B" not in pruned
+        ids = _pruned_ids(pruned)
+        assert "C" in ids
+        assert "root" not in ids
+        assert "A" not in ids
+        assert "B" not in ids
 
     def test_running_nodes_protected(self, pruner, exec_spec):
         root = _make_node("root", None, lcb=0.8, total_cost=10)
@@ -77,7 +83,7 @@ class TestProtectionList:
         exec_spec.pruning.reward_threshold = 0.5
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
-        assert "R" not in pruned
+        assert "R" not in _pruned_ids(pruned)
 
 
 class TestLCBThresholdPruning:
@@ -96,7 +102,7 @@ class TestLCBThresholdPruning:
         exec_spec.pruning.reward_threshold = 0.0  # auto -> 0.5 * 1.0 = 0.5
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
-        assert "bad" in pruned
+        assert "bad" in _pruned_ids(pruned)
 
     def test_does_not_prune_above_threshold(self, pruner, exec_spec):
         best = _make_node("best", None, lcb=1.0, total_cost=10)
@@ -106,7 +112,7 @@ class TestLCBThresholdPruning:
         open_list = [ok]
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
-        assert "ok" not in pruned
+        assert "ok" not in _pruned_ids(pruned)
 
 
 class TestParetoPruning:
@@ -127,7 +133,7 @@ class TestParetoPruning:
         exec_spec.pruning.reward_threshold = -1000.0
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
-        assert "B" in pruned
+        assert "B" in _pruned_ids(pruned)
 
     def test_non_dominated_not_pruned(self, pruner, exec_spec):
         # Neither dominates the other (trade-off)
@@ -140,8 +146,9 @@ class TestParetoPruning:
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
         # Neither should be pruned (they are not dominated, and both in top-k)
-        assert "A" not in pruned
-        assert "B" not in pruned
+        ids = _pruned_ids(pruned)
+        assert "A" not in ids
+        assert "B" not in ids
 
 
 class TestBudgetPruning:
@@ -162,7 +169,7 @@ class TestBudgetPruning:
         exec_spec.pruning.reward_threshold = -1000.0  # disable threshold
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
-        assert "n5" in pruned
+        assert "n5" in _pruned_ids(pruned)
 
     def test_no_prune_when_under_budget(self, pruner, exec_spec):
         n1 = _make_node("n1", None, lcb=0.9, total_cost=1000)
@@ -174,7 +181,7 @@ class TestBudgetPruning:
 
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
         # total_cost = 1500 < 3600 budget
-        assert "n2" not in pruned
+        assert "n2" not in _pruned_ids(pruned)
 
 
 class TestPruneEmpty:
@@ -190,4 +197,4 @@ class TestPruneEmpty:
         open_list = [n]
         pruned = pruner.prune(open_list, set(), all_nodes, exec_spec)
         # The only node is also the best, so protected
-        assert "only" not in pruned
+        assert "only" not in _pruned_ids(pruned)

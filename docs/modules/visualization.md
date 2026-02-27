@@ -25,7 +25,7 @@
 ## CLI コマンド
 
 ```bash
-sera visualize [--work-dir PATH] [--step N] [--output PATH]
+sera visualize [--work-dir PATH] [--step N] [--output PATH] [--live] [--port N]
 ```
 
 | オプション | デフォルト | 説明 |
@@ -33,8 +33,10 @@ sera visualize [--work-dir PATH] [--step N] [--output PATH]
 | `--work-dir` | `./sera_workspace` | SERA ワークスペースのパス |
 | `--step` | `None`（最新） | 可視化するチェックポイントのステップ番号 |
 | `--output` | `None`（自動） | 出力 HTML ファイルのパス |
+| `--live` | `False` | チェックポイント変更を監視し自動更新する HTTP サーバーを起動 |
+| `--port` | `8080` | ライブサーバーのポート番号 |
 
-### run_visualize(work_dir, step=None, output=None) -> None
+### run_visualize(work_dir, step=None, output=None, live=False, port=8080) -> None
 
 `commands/visualize_cmd.py` の CLI ハンドラ。
 
@@ -45,6 +47,16 @@ sera visualize [--work-dir PATH] [--step N] [--output PATH]
 3. 成功時: 生成パスを表示
 4. `FileNotFoundError`: チェックポイントが見つからない旨を表示し `exit(1)`
 5. その他の例外: エラーメッセージを表示し `exit(1)`
+
+### ライブサーバー機能
+
+`live=True` の場合、`_run_live_server()` を呼び出し以下の動作を行う:
+
+- ポーリングベースのファイルウォッチャー（5 秒間隔）でチェックポイント変更を検知
+- 変更検知時に HTML を再生成
+- HTML に `<meta http-equiv="refresh" content="10">` を注入してブラウザを自動リロード
+- `http.server` を使用した HTTP サーバーを `port` で起動
+- 外部依存なし（stdlib のみ）
 
 ---
 
@@ -280,7 +292,7 @@ def render_html(
 | Total Nodes | ノード数と成功率 |
 | Best Node | 最良ノードの ID, LCB, mu +/- SE |
 | Status Distribution | ステータス別の棒グラフ |
-| Operator Distribution | オペレータ別の棒グラフ |
+| Operator Distribution | オペレータ別の円グラフ（pie chart） |
 | Depth Distribution | 深さ別の棒グラフ |
 | Best LCB History | LCB 推移の折れ線グラフ（SVG） |
 

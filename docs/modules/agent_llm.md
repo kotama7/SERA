@@ -30,11 +30,14 @@ class ToolCall:
     tool_name: str
     arguments: dict[str, Any] = field(default_factory=dict)
     call_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    reasoning: str = ""
 ```
+
+- `reasoning`: ツール呼び出しの前にLLMが生成した推論テキスト（ローカルプロバイダでのパース時に抽出）
 
 ## GenerationOutput (dataclass)
 
-`generate()` / `generate_with_tools()` の構造化された出力。
+`generate()` / `generate_with_tools()` / `generate_full()` の構造化された出力。
 
 ```python
 @dataclass
@@ -42,7 +45,12 @@ class GenerationOutput:
     text: str | None = None
     tool_calls: list[ToolCall] | None = None
     purpose: str = ""
+    text_log_prob: float | None = None
+    tool_call_log_probs: list[float] | None = None
 ```
+
+- `text_log_prob`: テキスト出力の対数確率（PPO用、ローカルプロバイダのみ）
+- `tool_call_log_probs`: 各ツール呼び出しの対数確率リスト（将来の tool_aware 報酬用）
 
 ---
 
@@ -105,6 +113,36 @@ if self._model_family:
         self._prompt_format = getattr(family_cfg, "prompt_format", "default")
 ```
 
+### call_function(function_name, prompt, ...) -> Any
+
+**構造化 LLM 呼び出しのプライマリエントリポイント。** `REGISTRY` に登録された `AgentFunction` のスキーマに基づいてLLMを呼び出し、出力を検証する非同期メソッド。
+
+```python
+async def call_function(
+    self,
+    function_name: str,
+    prompt: str,
+    purpose: str | None = None,
+    adapter_node_id: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> Any
+```
+
+**処理フロー:**
+
+1. `REGISTRY.get(function_name)` で `AgentFunction` を取得
+2. `allowed_tools` が定義されている場合: `AgentLoop` を使用してReActループで実行（ツール呼び出し付き）
+3. API プロバイダ（OpenAI/Anthropic）で `return_schema` が定義されている場合: ネイティブ tool calling を使用
+4. ローカルプロバイダの場合: スキーマをプロンプトに注入してテキスト生成
+5. `handler` が定義されている場合: `handler(raw_response)` で後処理
+6. `validate_against_schema()` で出力を検証
+7. 失敗時: `max_retries` 回までリトライ（温度を +0.1 ずつインクリメント）
+
+**`generate()` との使い分け:**
+- `call_function()`: スキーマ検証が必要な構造化呼び出し（JSON/CODE出力）に使用
+- `generate()`: フリーテキスト生成に使用
+
 ### generate(prompt, purpose, ...) -> str
 
 LLM からテキストを生成する非同期メソッド。
@@ -129,6 +167,21 @@ async def generate(
 | `anthropic` | Anthropic Messages API を呼び出し |
 
 全呼び出しは `agent_llm_log.jsonl` にログ記録される（`_log_call`）。
+
+### generate_full(prompt, purpose, ...) -> GenerationOutput
+
+`generate()` と同様だが、`GenerationOutput` を返す非同期メソッド。`text_log_prob` 等のメタデータも含む。
+
+```python
+async def generate_full(
+    self,
+    prompt: str,
+    purpose: str,
+    adapter_node_id: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> GenerationOutput
+```
 
 ### _format_prompt(prompt, purpose) -> str
 
@@ -160,7 +213,21 @@ async def generate_with_tools(
 |-----------|------|
 | `openai` | ネイティブ tool calling を使用。レスポンスから `tool_calls` を抽出 |
 | `anthropic` | ネイティブ tool calling を使用。レスポンスから `tool_use` ブロックを抽出 |
-| `local` | プロンプトにツール定義を JSON で埋め込み、LLM にツール呼び出しの JSON を生成させてパース |
+| `local` | `_generate_local_with_tools()` でネイティブチャットテンプレートのツール呼び出しまたはプロンプトベースでツール定義を注入し、`_parse_local_tool_calls()` でパース |
+
+### _generate_local_with_tools(prompt, available_tools, ...) -> str
+
+ローカルプロバイダでのツール呼び出し付きテキスト生成の内部非同期メソッド。
+
+- トークナイザのチャットテンプレートが `tools` パラメータをサポートしている場合はネイティブのツール呼び出しフォーマットを使用
+- サポートしていない場合はツール定義をJSONとしてプロンプトに埋め込む
+
+### _parse_local_tool_calls(text) -> tuple[list[ToolCall] | None, str] [staticmethod]
+
+ローカルモデルの出力からツール呼び出しを抽出する静的メソッド。
+
+- `<tool_call>` タグ内のJSON、またはプレーンJSONとしてパース
+- 返り値: `(tool_calls, remaining_text)` のタプル。ツール呼び出しが見つからない場合は `(None, text)`
 
 ### load_adapter(adapter_node_id, lineage_manager)
 
