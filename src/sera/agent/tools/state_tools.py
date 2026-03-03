@@ -87,7 +87,11 @@ async def handle_get_best_node(
     if best is None:
         return {"error": "No best node yet", "node": None}
 
-    return {"node": best.to_dict()}
+    node_dict = best.to_dict()
+    # Strip large fields to avoid JSON truncation in agent observation window
+    for large_key in ("experiment_code", "metrics_raw", "failure_context"):
+        node_dict.pop(large_key, None)
+    return {"node": node_dict}
 
 
 async def handle_get_search_stats(

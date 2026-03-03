@@ -81,7 +81,20 @@ def _compile_latex(paper_dir: Path, bib_path: Path | None) -> bool:
             return False
 
     except FileNotFoundError:
-        console.print("[yellow]pdflatex not found. Install TeX Live to compile: sudo apt install texlive-latex-extra[/yellow]")
+        console.print("[yellow]pdflatex not found, trying weasyprint fallback...[/yellow]")
+        try:
+            import markdown
+            from weasyprint import HTML
+            md_path = paper_dir / "paper.md"
+            if md_path.exists():
+                md_text = md_path.read_text()
+                html = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+                html_full = f"<html><body style='font-family:serif;max-width:800px;margin:auto;padding:40px'>{html}</body></html>"
+                HTML(string=html_full).write_pdf(str(paper_dir / "paper.pdf"))
+                console.print("[green]PDF generated via weasyprint: paper.pdf[/green]")
+                return True
+        except Exception as we:
+            console.print(f"[yellow]weasyprint fallback failed: {we}[/yellow]")
         return False
     except subprocess.TimeoutExpired:
         console.print("[red]pdflatex timed out.[/red]")

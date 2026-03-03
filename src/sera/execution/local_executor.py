@@ -334,7 +334,7 @@ class LocalExecutor(Executor):
                     cmd,
                     stdout=stdout_f,
                     stderr=stderr_f,
-                    cwd=str(artifacts_dir),
+                    cwd=str(run_dir),
                     shell=use_shell,
                     env=proc_env,
                 )
@@ -522,7 +522,7 @@ class LocalExecutor(Executor):
                 *cmd_parts,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(artifacts_dir),
+                cwd=str(run_dir),
                 env=proc_env,
             )
 

@@ -152,15 +152,22 @@ def _run_experiment(
     else:
         cmd = inner_cmd
 
-    with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=out_f,
-            stderr=err_f,
-            cwd=run_dir,
-        )
-        exit_code = proc.wait()
-
+    try:
+        with open(stdout_path, "w") as out_f, open(stderr_path, "w") as err_f:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=out_f,
+                stderr=err_f,
+                cwd=run_dir,
+            )
+            exit_code = proc.wait()
+    except Exception as exc:
+        try:
+            with open(stderr_path, "a") as ef:
+                ef.write(f"run_experiment_job error: {exc}\n")
+        except Exception:
+            pass
+        return 1
     return exit_code
 
 
@@ -851,7 +858,7 @@ class SlurmExecutor(Executor):
             try:
                 return job.result()
             except Exception:
-                return 0
+                return 1  # completed but result raised -- treat as failure
         elif state == "TIMEOUT":
             raise TimeoutError(f"SLURM job {job.job_id} hit SLURM time limit")
         elif state == "OUT_OF_MEMORY":
@@ -883,7 +890,7 @@ class SlurmExecutor(Executor):
                     try:
                         return job.result()
                     except Exception:
-                        return 0
+                        return 1  # treat vanished-without-result as failure
                 if state in ("FAILED",):
                     try:
                         job.result()
@@ -958,7 +965,7 @@ class SlurmExecutor(Executor):
             try:
                 return job.result()
             except Exception:
-                return 0
+                return 1  # completed but result raised -- treat as failure
         elif state == "TIMEOUT":
             raise TimeoutError(f"SLURM job {job.job_id} hit SLURM time limit")
         elif state == "OUT_OF_MEMORY":
@@ -990,7 +997,7 @@ class SlurmExecutor(Executor):
                     try:
                         return job.result()
                     except Exception:
-                        return 0
+                        return 1  # treat vanished-without-result as failure
                 if state in ("FAILED",):
                     try:
                         job.result()

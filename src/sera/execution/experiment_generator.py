@@ -54,10 +54,12 @@ class ExperimentGenerator:
         agent_llm: Any,
         problem_spec: Any,
         work_dir: str | Path = "./sera_workspace",
+        exec_spec: Any = None,
     ):
         self.agent_llm = agent_llm
         self.problem_spec = problem_spec
         self.work_dir = Path(work_dir)
+        self._exec_spec = exec_spec
 
     def _get_language_config(self) -> Any:
         """Get language config from problem spec, with defaults for Python."""
@@ -99,11 +101,23 @@ class ExperimentGenerator:
 
         if node.experiment_code:
             # Use pre-existing code (e.g., from debug operator)
-            code = self._extract_code(node.experiment_code, lang_config.code_block_tag)
-            experiment = GeneratedExperiment(
-                entry_point=script_filename,
-                files=[GeneratedFile(script_filename, code)],
-            )
+            # First try multi-file JSON parse (debug may produce JSON structure)
+            if multi_file:
+                parsed = self._parse_multi_file_json(node.experiment_code)
+                if parsed is not None:
+                    experiment = parsed
+                else:
+                    code = self._extract_code(node.experiment_code, lang_config.code_block_tag)
+                    experiment = GeneratedExperiment(
+                        entry_point=script_filename,
+                        files=[GeneratedFile(script_filename, code)],
+                    )
+            else:
+                code = self._extract_code(node.experiment_code, lang_config.code_block_tag)
+                experiment = GeneratedExperiment(
+                    entry_point=script_filename,
+                    files=[GeneratedFile(script_filename, code)],
+                )
         elif multi_file:
             experiment = await self._generate_multi_file(node, lang_config, script_filename)
         else:
@@ -152,6 +166,8 @@ class ExperimentGenerator:
         )
 
     def _parse_multi_file_json(self, text: str) -> GeneratedExperiment | None:
+        # Strip <think>...</think> blocks before parsing
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         """Try to extract a multi-file JSON structure from LLM output.
 
         Expected format:
@@ -160,20 +176,27 @@ class ExperimentGenerator:
 
         Returns None if the text doesn't contain valid multi-file JSON.
         """
-        # Try to find JSON in code fences first
-        match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-        raw = match.group(1) if match else text
+        # Try to find JSON in code fences first (allow space between ``` and json)
+        match = re.search(r"```\s*json\s*(.*?)\s*```", text, re.DOTALL)
 
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try to find a JSON object in the text
-            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-            if not brace_match:
-                return None
+        def _try_parse(s: str):
             try:
-                data = json.loads(brace_match.group())
+                return json.loads(s)
             except json.JSONDecodeError:
+                return None
+
+        data = _try_parse(match.group(1).strip()) if match else None
+
+        if data is None:
+            # No closing ``` or parse failed: find first { and try to end of string
+            brace_start = text.find("{")
+            if brace_start >= 0:
+                data = _try_parse(text[brace_start:])
+            if data is None:
+                brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+                if brace_match:
+                    data = _try_parse(brace_match.group())
+            if data is None:
                 return None
 
         if not isinstance(data, dict) or "entry_point" not in data or "files" not in data:
@@ -182,10 +205,12 @@ class ExperimentGenerator:
         entry_point = data["entry_point"]
         files = []
         for f in data["files"]:
-            path = f.get("path", f.get("relative_path", ""))
-            content = f.get("content", "")
-            if path:
-                files.append(GeneratedFile(relative_path=path, content=content))
+            fpath = f.get("path", f.get("relative_path", ""))
+            fcontent = f.get("content", "")
+            # Strip <think> blocks from file contents
+            fcontent = re.sub(r"<think>.*?</think>", "", fcontent, flags=re.DOTALL).strip()
+            if fpath:
+                files.append(GeneratedFile(relative_path=fpath, content=fcontent))
 
         if not files:
             return None
@@ -230,6 +255,88 @@ class ExperimentGenerator:
             file_path.write_text(gf.content, encoding="utf-8")
             logger.debug("Wrote %s (%d bytes)", file_path, len(gf.content))
 
+
+
+    def _inject_pip_installs(self, code: str) -> str:
+        """Parse imports from generated code and prepend pip install for unknown packages."""
+        import ast, re
+        known = {
+            'argparse','json','time','math','random','os','sys','subprocess',
+            'pathlib','collections','itertools','functools','typing','abc',
+            'dataclasses','copy','io','struct','ctypes','threading','multiprocessing',
+            'numpy','scipy','torch','torchvision','torchaudio','submitit','structlog',
+            'pydantic','yaml','rich','typer','transformers','peft','accelerate',
+            'tqdm','requests','aiohttp','matplotlib','seaborn','pandas',
+        }
+        # Packages that DO NOT EXIST on PyPI — user-configurable via execution_spec.blocked_fake_packages
+        _blocked_cfg = list(getattr(self._exec_spec, 'blocked_fake_packages', None) or []) if self._exec_spec else []
+        BLOCKED_FAKE_PKGS = set(_blocked_cfg)
+        _blocked_found = [m.group(1) for m in re.finditer(r'^(?:import|from)\s+(\w+)', code, re.MULTILINE)
+                          if m.group(1) in BLOCKED_FAKE_PKGS]
+        if _blocked_found:
+            logger.warning('Generated code uses nonexistent package(s): %s; injecting error', _blocked_found)
+            for pkg in _blocked_found:
+                code = code.replace(f'import {pkg}', f'raise ImportError("Package {pkg} does not exist on PyPI")')
+                code = code.replace(f'from {pkg}', f'raise ImportError("Package {pkg} does not exist on PyPI; from')
+
+        pip_map = {
+            'sklearn': 'scikit-learn', 'cv2': 'opencv-python', 'PIL': 'Pillow',
+            'qiskit': 'qiskit', 'tensorflow': 'tensorflow', 'keras': 'tensorflow',
+            'lightgbm': 'lightgbm', 'xgboost': 'xgboost', 'catboost': 'catboost',
+            'numba': 'numba', 'gym': 'gymnasium', 'optuna': 'optuna',
+            'statsmodels': 'statsmodels', 'sympy': 'sympy', 'networkx': 'networkx',
+        }
+        # Find top-level imports via regex (safe even if code has syntax errors)
+        imports = set()
+        for m in re.finditer(r'^(?:import|from)\s+(\w+)', code, re.MULTILINE):
+            imports.add(m.group(1))
+        to_install = []
+        for pkg in imports:
+            if pkg not in known:
+                pip_pkg = pip_map.get(pkg, pkg)
+                to_install.append(pip_pkg)
+        if not to_install:
+            return code
+        install_lines = "import subprocess, sys\n"
+        for p in to_install:
+            install_lines += f"subprocess.run([sys.executable, '-m', 'pip', 'install', '{p}'], check=False, capture_output=True)\n"
+        install_lines += "\n"
+        # Insert after shebang/encoding lines
+        lines = code.splitlines(keepends=True)
+        insert_at = 0
+        for i, line in enumerate(lines):
+            if line.startswith('#!') or line.startswith('# -*-') or line.startswith('# coding'):
+                insert_at = i + 1
+            elif i == 0:
+                pass
+            else:
+                break
+        lines.insert(insert_at, install_lines)
+        return "".join(lines)
+
+    @staticmethod
+    def _validate_generated_code(code: str, data_location: str) -> tuple:
+        """Validate generated experiment code for common issues.
+
+        Returns (is_valid, warning_message).
+        """
+        warnings = []
+        placeholder_patterns = [
+            "path_to_data", "your_data_path", "/path/to/", "PATH_TO_",
+            "data_path_here", "INSERT_PATH", "YOUR_PATH",
+        ]
+        for p in placeholder_patterns:
+            if p in code:
+                warnings.append(f"Placeholder detected: {p!r}")
+        if "metrics.json" not in code:
+            warnings.append("metrics.json not written in generated code")
+        if data_location and ("http" in data_location or "ftp" in data_location):
+            if "ImageFolder" in code or "torchvision.datasets" in code:
+                warnings.append("ImageFolder detected but task uses URL data (possible wrong task type)")
+        if warnings:
+            return False, "; ".join(warnings)
+        return True, ""
+
     async def _generate_code(self, node: Any) -> str:
         """Call the LLM to generate experiment code.
 
@@ -258,6 +365,16 @@ class ExperimentGenerator:
         # Describe seed argument based on language config
         seed_arg_description = lang_config.seed_arg_format.replace("{seed}", "<int>")
 
+        # Problem-specific notes from problem_spec (user-configurable)
+        data_description = getattr(self.problem_spec, "data_description", "")
+        notes = getattr(self.problem_spec, "notes", "") or ""
+        notes_parts = []
+        if data_description:
+            notes_parts.append(f"Data description: {data_description}")
+        if notes:
+            notes_parts.append(f"Notes: {notes}")
+        notes_section = ("\n".join(notes_parts) + "\n\n") if notes_parts else ""
+
         # Include experiment template if available
         template = getattr(self.problem_spec, "experiment_template", "")
         template_section = ""
@@ -277,6 +394,7 @@ class ExperimentGenerator:
             seed_arg_description=seed_arg_description,
             code_block_tag=lang_config.code_block_tag,
             template_section=template_section,
+            notes_section=notes_section,
         )
 
         # Prefer call_function path
@@ -286,6 +404,24 @@ class ExperimentGenerator:
             )
             if not code:
                 code = "# Error: code generation returned empty result"
+            valid, warn = self._validate_generated_code(code, data_location)
+            if not valid:
+                logger.warning("[experiment_generator] Code validation warnings: %s", warn)
+            # Syntax check: only for Python (compile() is Python-specific)
+            if getattr(lang_config, "name", "python") == "python":
+                for _retry in range(2):
+                    try:
+                        compile(code, "<generated>", "exec")
+                        break  # syntax ok
+                    except SyntaxError as se:
+                        logger.warning("[experiment_generator] SyntaxError in generated code (retry %d): %s", _retry+1, se)
+                        retry_code = await self.agent_llm.call_function(
+                            "experiment_code_gen", prompt=prompt, purpose="experiment_code_gen", temperature=0.5 + (_retry+1)*0.1
+                        )
+                        if retry_code:
+                            code = retry_code
+            # Auto-inject pip installs for unknown packages
+            code = self._inject_pip_installs(code)
             return code
 
         # Legacy path (deprecated — use call_function instead)
@@ -300,8 +436,8 @@ class ExperimentGenerator:
         Tries to find a fenced code block first, then falls back
         to the raw response.
         """
-        # Try language-specific code block
-        pattern = rf"```{re.escape(code_block_tag)}\s*(.*?)\s*```"
+        # Try language-specific code block (allow space between ``` and tag)
+        pattern = rf"```\s*{re.escape(code_block_tag)}\s*(.*?)\s*```"
         match = re.search(pattern, response, re.DOTALL)
         if match:
             return match.group(1).strip()

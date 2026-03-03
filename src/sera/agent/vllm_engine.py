@@ -44,6 +44,7 @@ class VLLMInferenceEngine:
             swap_space=inf.swap_space_gb,
             enforce_eager=inf.enforce_eager,
             tensor_parallel_size=tp_size,
+            max_num_seqs=32,
         )
         self._tokenizer = AutoTokenizer.from_pretrained(
             model_spec.base_model.id,
@@ -105,7 +106,9 @@ class VLLMInferenceEngine:
             sampling_params,
             lora_request=lora_request,
         )
-        return outputs[0].outputs[0].text
+        result = outputs[0].outputs[0].text
+        import re as _re; result = _re.sub(r"<think>.*?</think>", "", result, flags=_re.DOTALL).strip()
+        return result
 
     def _get_lora_request(
         self,

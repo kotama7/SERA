@@ -118,6 +118,7 @@ def run_research(
         agent_llm=agent_llm,
         problem_spec=specs.problem,
         work_dir=workspace,
+        exec_spec=specs.execution,
     )
 
     eval_logger = JsonlLogger(log_dir / "eval_log.jsonl")
@@ -271,6 +272,8 @@ def run_research(
     # Wire SearchManager into ToolExecutor for state tools (get_node_info, etc.)
     if tool_executor is not None:
         tool_executor._search_manager = manager
+        # Wire tool_executor into agent_llm so AgentLoop activates in call_function
+        agent_llm._tool_executor = tool_executor
 
     # Resume from checkpoint if requested
     if resume:

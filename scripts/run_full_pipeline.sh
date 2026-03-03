@@ -9,7 +9,7 @@ set -e
 
 cd /home/t-kotama/workplace/SERA
 source .venv/bin/activate
-source .env
+set -a; source .env; set +a; export $(grep -v "^#" .env | grep -v "^$" | cut -d= -f1 | xargs) 2>/dev/null || true
 export HF_HOME=/home/t-kotama/.cache/huggingface
 
 echo "=== SERA Full Pipeline (Phase 2-8) ==="

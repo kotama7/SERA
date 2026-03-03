@@ -67,3 +67,25 @@ logs/
 
 # Claude Code
 .claude/
+
+# SERA workspace - large artifacts (ignore runs, checkpoints, model weights)
+sera_workspace*/runs/
+sera_workspace*/checkpoints/
+sera_workspace*/outputs/
+sera_workspace*/lineage/nodes/
+# Keep: specs/, logs/, paper/
+
+# Input / data files that are workspace-specific (keep input yamls in repo)
+# *.yaml is kept - do NOT ignore
+
+# Model weight files
+*.safetensors
+*.pt
+*.bin
+*.ckpt
+# Input/problem data
+input*.yaml
+sera_workspace*/specs/input*.yaml
+
+# Workspace specs (problem-specific, not for repo)
+sera_workspace*/specs/

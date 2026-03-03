@@ -52,6 +52,7 @@ class PPOTrainer:
         self.exec_spec = exec_spec
         self.model_spec = model_spec
         self.lineage_manager = lineage_manager
+        self._last_adapter_node_id: str | None = None  # tracks PPO lineage chain
         self.plan_spec = plan_spec
         self.logger = JsonlLogger(log_path)
 
@@ -245,7 +246,6 @@ class PPOTrainer:
         """Actual PPO implementation using trl/peft/accelerate primitives."""
         import numpy as np
         import torch
-        from accelerate import Accelerator
         from peft import get_peft_model_state_dict
         from trl.trainer.utils import entropy_from_logits
 
@@ -269,7 +269,6 @@ class PPOTrainer:
                         specs,
                         np=np,
                         torch=torch,
-                        Accelerator=Accelerator,
                         get_peft_model_state_dict=get_peft_model_state_dict,
                         entropy_from_logits=entropy_from_logits,
                         all_nodes=all_nodes,
@@ -304,7 +303,6 @@ class PPOTrainer:
         *,
         np: Any,
         torch: Any,
-        Accelerator: Any,
         get_peft_model_state_dict: Any,
         entropy_from_logits: Any,
         all_nodes: dict | None = None,
@@ -345,7 +343,36 @@ class PPOTrainer:
 
         lora_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" in n.lower()]
         if not lora_params:
-            logger.warning("No LoRA parameters found; skipping PPO update")
+            # Auto-wrap plain model with LoRA on first PPO call
+            logger.info("No LoRA params found -- wrapping model with LoRA adapter for PPO")
+            try:
+                from peft import LoraConfig, get_peft_model
+                from trl import AutoModelForCausalLMWithValueHead
+                adapter = self.model_spec.adapter_spec
+                lora_config = LoraConfig(
+                    r=adapter.rank,
+                    lora_alpha=adapter.alpha,
+                    target_modules=list(adapter.target_modules),
+                    lora_dropout=adapter.dropout,
+                    init_lora_weights=adapter.init == "zero",
+                )
+                base_model = getattr(model, "pretrained_model", model)
+                peft_model = get_peft_model(base_model, lora_config)
+                wrapped = AutoModelForCausalLMWithValueHead(peft_model)
+                # Replace model in agent_llm
+                agent_llm._model = wrapped
+                model = wrapped
+                lora_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" in n.lower()]
+                logger.info("LoRA wrapping done, %d LoRA params found", len(lora_params))
+            except Exception as lora_err:
+                logger.warning("LoRA auto-wrap failed: %s; skipping PPO update", lora_err)
+                return {
+                    "mean_reward": float(np.mean([r.reward for r in rollouts])),
+                    "kl_divergence": 0.0, "policy_loss": 0.0,
+                    "value_loss": 0.0, "entropy": 0.0, "delta_norm_l2": 0.0,
+                }
+        if not lora_params:
+            logger.warning("No LoRA parameters found even after wrap; skipping PPO update")
             return {
                 "mean_reward": float(np.mean([r.reward for r in rollouts])),
                 "kl_divergence": 0.0,
@@ -355,13 +382,25 @@ class PPOTrainer:
                 "delta_norm_l2": 0.0,
             }
 
-        # Use accelerate for device management and gradient ops
-        accelerator = Accelerator()
+        # Use plain PyTorch (no Accelerator) to avoid is_peft_model attribute issues
         optimizer = torch.optim.AdamW(lora_params, lr=self.lr)
-        model, optimizer = accelerator.prepare(model, optimizer)
+        model.train()
 
-        # Snapshot pre-update weights via peft API
+        # Determine parent adapter early (needed for load + save)
+        parent_adapter_id = self._last_adapter_node_id or "adapter_root"
+
+        # Load parent adapter weights before PPO (docs §1.2: materialize + set_peft)
+        # This ensures delta = post - parent_state, not post - cumulative_state
         peft_model = getattr(model, "pretrained_model", model)
+        if parent_adapter_id and parent_adapter_id != "adapter_root" and self.lineage_manager is not None:
+            try:
+                parent_weights = self.lineage_manager.materialize(parent_adapter_id)
+                from peft import set_peft_model_state_dict
+                set_peft_model_state_dict(peft_model, parent_weights)
+                logger.info("Loaded parent adapter %s before PPO update", parent_adapter_id[:8])
+            except Exception as e:
+                logger.warning("Could not load parent adapter %s: %s -- using current weights", parent_adapter_id[:8], e)
+        # Snapshot pre-update weights via peft API
         pre_weights = {k: v.clone().detach() for k, v in get_peft_model_state_dict(peft_model).items()}
 
         total_policy_loss = 0.0
@@ -427,8 +466,8 @@ class PPOTrainer:
                     continue
 
                 optimizer.zero_grad()
-                accelerator.backward(loss)
-                accelerator.clip_grad_norm_(lora_params, self.max_grad_norm)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(lora_params, self.max_grad_norm)
                 optimizer.step()
 
                 total_policy_loss += policy_loss.item()
@@ -449,15 +488,9 @@ class PPOTrainer:
 
             # Determine parent adapter_node_id from the best rollout's node (§6.7:
             # "PPO更新対象のノード群の「最良ノード」の親LoRAをベースに更新")
-            parent_adapter_id = "adapter_root"
-            if rollouts and all_nodes:
-                best_rollout = max(rollouts, key=lambda r: r.reward)
-                best_node = all_nodes.get(best_rollout.node_id)
-                if best_node and getattr(best_node, "parent_id", None):
-                    parent_node = all_nodes.get(best_node.parent_id)
-                    if parent_node and getattr(parent_node, "adapter_node_id", None):
-                        parent_adapter_id = parent_node.adapter_node_id
-
+            # Use previous PPO output as parent to form a linear lineage chain
+            # parent_adapter_id set above
+            best_rollout = max(rollouts, key=lambda r: r.reward) if rollouts else None
             adapter_spec_hash = getattr(
                 getattr(self.model_spec, "compatibility", None),
                 "adapter_spec_hash",
@@ -482,9 +515,11 @@ class PPOTrainer:
                     depth=adapter_depth,
                     adapter_spec_hash=adapter_spec_hash,
                 )
+                self._last_adapter_node_id = new_adapter_node_id
                 logger.info(
-                    "Saved adapter delta %s (norm=%.4f)",
+                    "Saved adapter delta %s parent=%s (norm=%.4f)",
                     new_adapter_node_id[:8],
+                    parent_adapter_id[:8] if parent_adapter_id else "root",
                     delta_norm,
                 )
             except Exception as e:

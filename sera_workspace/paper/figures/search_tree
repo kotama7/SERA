@@ -1,0 +1,7 @@
+digraph {
+	fontsize=10 rankdir=TB
+	"de7baba7-6a86-4607-b3e2-30b529f45892" [label="de7baba7\n\nmu=825.002" fillcolor=gold style=filled]
+	"1d79e034-f7cc-451e-b066-f558b4648517" [label="1d79e034\n\nmu=803.079" fillcolor=gold style=filled]
+	"e54f234a-a87c-40bb-b702-48701d8aa877" [label="e54f234a\n\nmu=788.233" fillcolor=gold style=filled]
+	"dc149f6c-af3f-46a5-989f-f23bc0095db4" [label="dc149f6c\n\nmu=579.380" fillcolor=gold style=filled]
+}

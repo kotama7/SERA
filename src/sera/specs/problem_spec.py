@@ -109,6 +109,8 @@ class ProblemSpecModel(BaseModel):
 
     title: str = Field("", description="Research title (LLM-generated, user-approved)")
     experiment_template: str = Field("", description="Base experiment template for code generation")
+    notes: str = Field("", description="User-defined notes and instructions for the agent")
+    data_description: str = Field("", description="Description of the dataset or benchmark")
 
     objective: ObjectiveConfig = Field(
         default_factory=lambda: ObjectiveConfig(description="Maximise score"),

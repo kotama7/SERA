@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from sera.utils.hashing import compute_spec_hash
+from sera.utils.hashing import compute_spec_hash, compute_adapter_spec_hash
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,19 @@ class SpecFreezer:
             with open(path, "w") as f:
                 yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
             logger.info(f"Saved {filename}")
+        # Propagate data.location from input1 -> problem_spec
+        if filename == "problem_spec.yaml":
+            input1_spec = getattr(specs, "input1", None)
+            if input1_spec is not None:
+                i1 = input1_spec.model_dump() if hasattr(input1_spec, "model_dump") else input1_spec
+                data_section = i1.get("data", {}) if isinstance(i1.get("data"), dict) else {}
+                data_loc = data_section.get("location", "")
+                if data_loc and isinstance(data, dict) and not data.get("data_location"):
+                    data["data_location"] = data_loc
+                    with open(path, "w") as f:
+                        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+                    logger.info(f"Propagated data_location to problem_spec: {data_loc}")
+
 
         # Auto-populate model metadata
         model_spec = getattr(specs, "model", None)
@@ -66,7 +79,7 @@ class SpecFreezer:
             if adapter_data is not None and compat is not None:
                 try:
                     adapter_dict = adapter_data.model_dump() if hasattr(adapter_data, "model_dump") else adapter_data
-                    compat.adapter_spec_hash = compute_spec_hash(adapter_dict)
+                    compat.adapter_spec_hash = compute_adapter_spec_hash(adapter_dict)
                 except Exception:
                     pass
 

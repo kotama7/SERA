@@ -4,6 +4,8 @@ Registers: search_draft, search_debug, search_improve.
 """
 
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 from sera.agent.agent_functions import (
     OutputMode,
@@ -98,7 +100,7 @@ _DEBUG_RETURN_SCHEMA: dict = {
     phase="search",
     default_temperature=0.5,
     max_retries=3,
-    allowed_tools=["read_experiment_log", "read_file", "execute_code_snippet"],
+    allowed_tools=["run_shell_command", "read_experiment_log", "read_file", "execute_code_snippet"],
     loop_config={"max_steps": 5, "tool_call_budget": 10, "timeout_sec": 120},
 )
 def handle_search_debug(response: str) -> dict | None:

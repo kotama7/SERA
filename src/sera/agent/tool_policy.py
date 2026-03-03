@@ -35,7 +35,7 @@ class ToolPolicy:
     blocked_write_patterns: list[str] = field(default_factory=lambda: ["specs/*.yaml", "*.lock", "*.jsonl"])
 
     # Shell command whitelist
-    allowed_shell_commands: list[str] = field(default_factory=lambda: ["pip", "python", "ls", "cat", "wc"])
+    allowed_shell_commands: list[str] = field(default_factory=lambda: ["pip", "python", "ls", "cat", "wc", "wget", "curl", "chmod", "tar", "bash", "sh", "cp", "mv", "rm", "mkdir", "echo", "head", "tail", "grep", "sed", "awk"])
 
     # Build tool commands (§7.3.2.7) — allowed only when compiled=True
     allowed_build_commands: list[str] = field(

@@ -324,6 +324,7 @@ class SpecBuilder:
             "task_brief": task.get("brief", "Research task"),
             "field": domain.get("field", ""),
             "subfield": domain.get("subfield", ""),
+            "data_location": data.get("location", ""),
             "data_description": data.get("description", ""),
             "data_format": data.get("format", ""),
             "data_size": data.get("size_hint", ""),

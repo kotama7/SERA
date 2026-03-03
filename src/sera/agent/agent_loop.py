@@ -4,6 +4,7 @@ See task/23_tool_execution.md section 29.4 for specification.
 """
 
 from __future__ import annotations
+import re as _re_think
 
 import json
 import logging
@@ -125,7 +126,7 @@ class AgentLoop:
             elapsed = time.monotonic() - start_time
             if elapsed > self.config.timeout_sec:
                 result = AgentLoopResult(
-                    final_output=turns[-1].generation.text if turns else None,
+                    final_output=(_re_think.sub(r"<think>.*?</think>", "", turns[-1].generation.text, flags=_re_think.DOTALL).strip() if turns else None),
                     turns=turns,
                     total_steps=step,
                     total_tool_calls=tool_call_count,
@@ -197,7 +198,7 @@ class AgentLoop:
                 # Check if budget exhausted
                 if tool_call_count >= self.config.tool_call_budget:
                     result = AgentLoopResult(
-                        final_output=gen_out.text,
+                        final_output=_re_think.sub(r"<think>.*?</think>", "", gen_out.text, flags=_re_think.DOTALL).strip(),
                         turns=turns,
                         total_steps=step + 1,
                         total_tool_calls=tool_call_count,
@@ -223,7 +224,7 @@ class AgentLoop:
                 turns.append(turn)
 
                 result = AgentLoopResult(
-                    final_output=gen_out.text,
+                    final_output=_re_think.sub(r"<think>.*?</think>", "", gen_out.text, flags=_re_think.DOTALL).strip(),
                     turns=turns,
                     total_steps=step + 1,
                     total_tool_calls=tool_call_count,
@@ -236,7 +237,7 @@ class AgentLoop:
         # Max steps reached
         total_wall = time.monotonic() - start_time
         result = AgentLoopResult(
-            final_output=turns[-1].generation.text if turns else None,
+            final_output=(_re_think.sub(r"<think>.*?</think>", "", turns[-1].generation.text, flags=_re_think.DOTALL).strip() if turns else None),
             turns=turns,
             total_steps=self.config.max_steps,
             total_tool_calls=tool_call_count,

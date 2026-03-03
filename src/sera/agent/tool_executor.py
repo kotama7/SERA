@@ -162,7 +162,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
     },
     "run_shell_command": {
         "name": "run_shell_command",
-        "description": "Run a whitelisted shell command (pip, python, ls, cat, wc).",
+        "description": "Run a shell command. Available: pip, python, wget, curl, g++, gcc, make, cmake, bash, sh, chmod, tar, ls, cat, grep, etc.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -366,10 +366,14 @@ class ToolExecutor:
             args,
             self._workspace,
         )
+        # Merge shell + build command whitelists for full shell access
+        _shell_cmds = list(self._policy.allowed_shell_commands)
+        if self._policy.compiled_language:
+            _shell_cmds = _shell_cmds + list(self._policy.allowed_build_commands)
         self._handlers["run_shell_command"] = lambda args: execution_tools.handle_run_shell_command(
             args,
             self._workspace,
-            self._policy.allowed_shell_commands,
+            _shell_cmds,
         )
 
         # File tools

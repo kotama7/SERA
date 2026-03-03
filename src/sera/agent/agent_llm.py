@@ -7,6 +7,8 @@ All calls are logged to agent_llm_log.jsonl.
 from __future__ import annotations
 
 import hashlib
+import logging
+logger = logging.getLogger(__name__)
 import os
 import time
 import uuid
@@ -427,22 +429,41 @@ class AgentLLM:
         base_model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, **load_kwargs)
         self._tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
 
-        if need_value_head:
+        # Always apply LoRA when adapter_spec is configured (PPO-ready)
+        # LoRA default init: B=zeros, A=kaiming_uniform -> delta_W = B@A = 0
+        # This means initial output is identical to the base model.
+        adapter = getattr(self.model_spec, "adapter_spec", None)
+        if adapter is not None:
             from peft import LoraConfig, get_peft_model
-            from trl import AutoModelForCausalLMWithValueHead
-
-            adapter = self.model_spec.adapter_spec
+            try:
+                from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
+            except ImportError:
+                from trl import AutoModelForCausalLMWithValueHead
             lora_config = LoraConfig(
                 r=adapter.rank,
                 lora_alpha=adapter.alpha,
                 target_modules=list(adapter.target_modules),
                 lora_dropout=adapter.dropout,
-                init_lora_weights=adapter.init == "zero",
+                init_lora_weights=True,  # B=zeros, A=kaiming -> delta_W=0 at start
+                bias="none",
             )
             peft_model = get_peft_model(base_model, lora_config)
             self._model = AutoModelForCausalLMWithValueHead(peft_model)
+            # from_pretrained() sets is_peft_model; direct __init__ call does not
+            self._model.is_peft_model = True
+            logger.info(
+                "LoRA attached at model init: rank=%d alpha=%d modules=%s (is_peft_model=True)",
+                adapter.rank, adapter.alpha, list(adapter.target_modules)
+            )
         else:
-            self._model = base_model
+            if need_value_head:
+                try:
+                    from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
+                except ImportError:
+                    from trl import AutoModelForCausalLMWithValueHead
+                self._model = AutoModelForCausalLMWithValueHead(base_model)
+            else:
+                self._model = base_model
 
     def _init_vllm_engine(self):
         """Lazy initialization of vLLM inference engine."""
@@ -528,6 +549,7 @@ class AgentLLM:
                         pad_token_id=pad_token_id,
                     )
                 result = self._tokenizer.decode(outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True)
+                import re as _rethink; result = _rethink.sub(r"<think>.*?</think>", "", result, flags=_rethink.DOTALL).strip()
             model_id = self.model_spec.base_model.id
 
         elif self._provider_name == "openai":
@@ -787,7 +809,9 @@ class AgentLLM:
         if self._mock_fn is not None:
             result_text = self._mock_fn(prompt, purpose)
             latency_ms = (time.monotonic() - start) * 1000
-            self._log_call(prompt, result_text, purpose, adapter_node_id, temperature, latency_ms)
+            _mid = getattr(getattr(self, "model_spec", None), "base_model", None)
+            _mid = getattr(_mid, "id", "mock") if _mid else "mock"
+            self._log_call(prompt, result_text, purpose, adapter_node_id, temperature, latency_ms, _mid)
             return GenerationOutput(text=result_text, tool_calls=None, purpose=purpose)
 
         temp = temperature or (
@@ -862,20 +886,31 @@ class AgentLLM:
                 tool_calls = None
 
         else:
-            # Local provider: use native chat template tool calling when available
-            result_text = await self._generate_local_with_tools(
-                prompt,
-                available_tools,
-                purpose,
-                adapter_node_id,
-                temp,
-                max_tok,
-            )
+            # Local provider: use vLLM if configured (faster), else native chat template
+            if self._inference_engine == "vllm":
+                if self._vllm_engine is None:
+                    self._init_vllm_engine()
+                result_text = self._vllm_engine.generate(prompt, temp, max_tok, adapter_node_id, self.lineage_manager)
+            else:
+                result_text = await self._generate_local_with_tools(
+                    prompt,
+                    available_tools,
+                    purpose,
+                    adapter_node_id,
+                    temp,
+                    max_tok,
+                )
             # Parse tool calls from <tool_call> tags or JSON fallback
             tool_calls, result_text = self._parse_local_tool_calls(result_text)
 
         latency_ms = (time.monotonic() - start) * 1000
-        self._log_call(prompt, result_text, purpose, adapter_node_id, temperature, latency_ms)
+        _mid2 = getattr(getattr(self, "model_spec", None), "base_model", None)
+        _mid2 = getattr(_mid2, "id", "mock") if _mid2 else "mock"
+        if self._provider_name == "openai":
+            _mid2 = getattr(self._provider, "model_id", "gpt-4o")
+        elif self._provider_name == "anthropic":
+            _mid2 = getattr(self._provider, "model_id", "claude-sonnet-4-20250514")
+        self._log_call(prompt, result_text, purpose, adapter_node_id, temperature, latency_ms, _mid2)
         return GenerationOutput(text=result_text, tool_calls=tool_calls, purpose=purpose)
 
     async def _generate_local_with_tools(
@@ -964,6 +999,7 @@ class AgentLLM:
                 eos_token_id=eos_ids if eos_ids else None,
             )
         result = self._tokenizer.decode(outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=False)
+        import re as _rethink2; result = _rethink2.sub(r"<think>.*?</think>", "", result, flags=_rethink2.DOTALL).strip()
 
         # Strip chat template special tokens but keep tool_call tags
         import re as _re

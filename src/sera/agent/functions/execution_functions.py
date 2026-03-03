@@ -30,7 +30,7 @@ from sera.agent.agent_functions import (
     phase="execution",
     default_temperature=0.5,
     max_retries=3,
-    allowed_tools=["read_file", "execute_code_snippet"],
+    allowed_tools=["web_search", "run_shell_command", "read_file", "execute_code_snippet"],
     loop_config={"max_steps": 8, "tool_call_budget": 15, "timeout_sec": 180},
 )
 def handle_experiment_code_gen(response: str) -> str:

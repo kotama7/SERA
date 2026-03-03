@@ -1,0 +1,59 @@
+{
+  "experiment_summaries": {
+    "baseline": [
+      {
+        "node_id": "de7baba7-6a86-4607-b3e2-30b529f45892",
+        "hypothesis": "",
+        "config": {},
+        "mu": 825.002,
+        "se": null,
+        "lcb": 825.002,
+        "feasible": true,
+        "op": "draft"
+      },
+      {
+        "node_id": "1d79e034-f7cc-451e-b066-f558b4648517",
+        "hypothesis": "",
+        "config": {},
+        "mu": 803.078852,
+        "se": null,
+        "lcb": 803.078852,
+        "feasible": true,
+        "op": "draft"
+      },
+      {
+        "node_id": "e54f234a-a87c-40bb-b702-48701d8aa877",
+        "hypothesis": "",
+        "config": {},
+        "mu": 788.232575,
+        "se": null,
+        "lcb": 788.232575,
+        "feasible": true,
+        "op": "draft"
+      },
+      {
+        "node_id": "dc149f6c-af3f-46a5-989f-f23bc0095db4",
+        "hypothesis": "",
+        "config": {},
+        "mu": 579.380451,
+        "se": null,
+        "lcb": 579.380451,
+        "feasible": true,
+        "op": "draft"
+      }
+    ],
+    "research": [],
+    "ablation": []
+  },
+  "convergence_data_len": 0,
+  "ablation_data": {},
+  "results_table": "| Method | Metric (\u03bc \u00b1 SE) | LCB | Feasible |\n|--------|----------------|-----|----------|\n|  | 825.0020 \u00b1 N/A | 825.0020 | Yes |\n|  | 803.0789 \u00b1 N/A | 803.0789 | Yes |\n|  | 788.2326 \u00b1 N/A | 788.2326 | Yes |\n|  | 579.3805 \u00b1 N/A | 579.3805 | Yes |",
+  "num_nodes": 4,
+  "best_node": {
+    "hypothesis": "",
+    "mu": 825.002,
+    "se": null,
+    "lcb": 825.002,
+    "config": {}
+  }
+}
